@@ -58,8 +58,9 @@ own merits.
 ## B. Install the two nodes
 
 ```
-make image          # RHEL 9.8 bootc container
-make iso            # -> installer ISO
+cd bootc
+./build.sh                 # RHEL 9.8 bootc container image
+./build.sh --push --iso    # build, push, then make an installer ISO
 ```
 
 One ISO installs both nodes. The kickstart matches the machine's own MACs against

@@ -8,6 +8,10 @@
 NODE1=${NODE1:-172.16.7.10}
 NODE2=${NODE2:-172.16.7.11}
 QNETD=${QNETD:-172.16.7.20}
+# Second corosync ring. Needed by the partition test, which has to sever BOTH
+# rings -- cutting only ring0 proves nothing, knet just keeps using ring1.
+NODE1_RING1=${NODE1_RING1:-172.18.8.10}
+NODE2_RING1=${NODE2_RING1:-172.18.8.11}
 N1NAME=${N1NAME:-node1}
 N2NAME=${N2NAME:-node2}
 
@@ -90,4 +94,90 @@ wait_node_up() {  # wait_node_up <ip> <timeout_s>
 schedule_unblock() {  # schedule_unblock <ip> <seconds>
   on "$1" "nohup bash -c 'sleep ${2:-300}; iptables -F INPUT; iptables -F OUTPUT' \
     >/dev/null 2>&1 &" || true
+}
+
+# ── guest helpers ──────────────────────────────────────────────────────────
+# Address of a guest via the qemu guest agent, asking whichever node runs it.
+guest_ip() {  # guest_ip <domain>
+  local d=$1 ip h
+  for h in "$NODE1" "$NODE2"; do
+    ip=$(on "$h" "virsh domifaddr $d --source agent 2>/dev/null" 2>/dev/null \
+         | grep -oP '\b\d+\.\d+\.\d+\.\d+(?=/)' | grep -v '^127\.' | head -1)
+    [ -n "$ip" ] && { echo "$ip"; return 0; }
+  done
+  return 1
+}
+
+GUESTUSER=${GUESTUSER:-lab}
+
+# A guest's boot id changes if and only if it rebooted. This is what separates a
+# genuine live migration from a stop/start that merely looks like one from the
+# cluster's point of view.
+guest_bootid() {  # guest_bootid <ip>
+  ssh $ssh_opts -o BatchMode=yes "$GUESTUSER@$1" \
+    'cat /proc/sys/kernel/random/boot_id' 2>/dev/null
+}
+
+vm_reachable() { ping -c1 -W1 "$1" >/dev/null 2>&1; }
+
+# Node currently running a resource, as a Pacemaker node name.
+rsc_node() {  # rsc_node <resource>
+  n1 "crm_mon -1 2>/dev/null" | grep -E "\b$1\b.*Started" \
+    | grep -oE "$N1NAME|$N2NAME" | tail -1
+}
+
+# dd reports kB/s or MB/s depending on how slow the device is, so matching a
+# literal " MB/s" silently yields nothing on a slow volume. Derive the rate from
+# the byte count and elapsed time instead of trusting dd's chosen unit.
+dd_rate_mbs() {  # dd_rate_mbs <dd stderr text>
+  awk '/copied|bytes/ {
+         for (i=1; i<=NF; i++) if ($i=="copied," || $i=="copied") { b=$1 }
+         for (i=1; i<=NF; i++) if ($i=="s,") { s=$(i-1) }
+       }
+       END { if (b>0 && s>0) printf "%.2f", (b/1048576)/s; }' <<<"$1"
+}
+dd_seconds() {  # dd_seconds <dd stderr text>
+  awk '{ for (i=1; i<=NF; i++) if ($i=="s,") { print $(i-1); exit } }' <<<"$1"
+}
+
+# `grep -c` prints 0 AND exits non-zero when nothing matches, so the common
+# idiom `$(cmd | grep -c X || echo 0)` yields a two-line "0\n0" that splits the
+# CSV row in half and corrupts the comparison. Count through this instead.
+safe_count() {  # safe_count <host-ip> <remote-cmd> <pattern>
+  local out
+  out=$(on "$1" "$2" 2>/dev/null | grep -c "$3" 2>/dev/null | head -1)
+  out=${out//[^0-9]/}
+  echo "${out:-0}"
+}
+
+# A fenced node answers SSH while it is still in early boot, long before
+# corosync starts -- so "can I ssh to it" is not "is it back in the cluster".
+# Ask the surviving node what it can actually see.
+wait_node_online() {  # wait_node_online <pcmk-node-name> <timeout_s>
+  local end=$(( $(date +%s) + ${2:-600} ))
+  while [ "$(date +%s)" -lt "$end" ]; do
+    n1 "crm_mon -1 2>/dev/null" | grep -qE "Online:.*\b$1\b" && return 0
+    sleep 5
+  done
+  return 1
+}
+
+# The appliance domain is named per node (svsan-node1 / svsan-node2), not
+# "svsan-vsa". Hardcoding the wrong name made backend detection fall through to
+# "unknown", which silently skipped every test in the matrix.
+svsan_domain() {  # svsan_domain <host-ip>
+  on "$1" "virsh list --all --name 2>/dev/null" 2>/dev/null | grep '^svsan-' | head -1
+}
+
+# Bounded wait for a remote condition. Every wait in this harness must have a
+# deadline: an unbounded `until ...; do sleep 5; done` turns a failed test into a
+# hung run that has to be killed by hand.
+wait_for() {  # wait_for <timeout_s> <host-ip> <remote test command>
+  local end=$(( $(date +%s) + $1 )); shift
+  local host=$1; shift
+  while [ "$(date +%s)" -lt "$end" ]; do
+    on "$host" "$*" >/dev/null 2>&1 && return 0
+    sleep 5
+  done
+  return 1
 }

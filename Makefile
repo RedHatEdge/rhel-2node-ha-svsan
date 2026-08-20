@@ -6,7 +6,6 @@
 #   make substrate   cluster, quorum, fencing, KVM  (both options need this)
 #   make drbd        stage Option B
 #   make svsan       stage Option A
-#   make reset       tear the storage layer back to bare substrate
 #   make status      pcs status from node1
 #
 # Everything runs inside .venv, so the system Ansible is never used.
@@ -17,7 +16,7 @@ PLAYBOOK:= $(VENV)/bin/ansible-playbook
 GALAXY  := $(VENV)/bin/ansible-galaxy
 FENCE   ?= redfish
 
-.PHONY: venv lock ping discover substrate drbd svsan reset status test clean
+.PHONY: venv lock ping discover substrate drbd svsan status test clean
 
 venv: $(VENV)/.stamp
 $(VENV)/.stamp: requirements.txt requirements.yml
@@ -46,9 +45,6 @@ substrate: venv
 
 svsan: venv
 	$(PLAYBOOK) playbooks/10-storage-svsan.yml -e storage_backend=svsan -e svsan_attach_san_nic=false
-
-reset: venv
-	$(PLAYBOOK) playbooks/90-reset-storage.yml -e confirm_reset=yes
 
 status: venv
 	@$(ANSIBLE) node1 -a 'pcs status' 2>/dev/null || echo "cluster not formed yet"

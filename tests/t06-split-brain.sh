@@ -12,10 +12,10 @@ schedule_unblock "$NODE2" 300
 
 info "severing both corosync rings between the nodes (arbiter stays reachable)"
 start=$(now_ms)
-n1 "iptables -I INPUT -s 172.16.7.11 -j DROP; iptables -I OUTPUT -d 172.16.7.11 -j DROP;
-    iptables -I INPUT -s 172.18.8.11 -j DROP; iptables -I OUTPUT -d 172.18.8.11 -j DROP"
-n2 "iptables -I INPUT -s 172.16.7.10 -j DROP; iptables -I OUTPUT -d 172.16.7.10 -j DROP;
-    iptables -I INPUT -s 172.18.8.10 -j DROP; iptables -I OUTPUT -d 172.18.8.10 -j DROP"
+n1 "iptables -I INPUT -s $NODE2 -j DROP; iptables -I OUTPUT -d $NODE2 -j DROP;
+    iptables -I INPUT -s $NODE2_RING1 -j DROP; iptables -I OUTPUT -d $NODE2_RING1 -j DROP"
+n2 "iptables -I INPUT -s $NODE1 -j DROP; iptables -I OUTPUT -d $NODE1 -j DROP;
+    iptables -I INPUT -s $NODE1_RING1 -j DROP; iptables -I OUTPUT -d $NODE1_RING1 -j DROP"
 
 sleep 45   # allow membership loss, arbiter arbitration, and fencing
 
@@ -35,9 +35,9 @@ esac
 # Only the survivor should hold quorum and be running resources.
 for ip in "$NODE1" "$NODE2"; do
   if node_up "$ip" && on "$ip" true 2>/dev/null; then
-    q=$(on "$ip" "pcs quorum status 2>/dev/null | grep -c 'Quorate:.*Yes'" || echo 0)
+    q=$(safe_count "$ip" "pcs quorum status" 'Quorate:.*Yes')
     record t06 survivor_quorate "$q" bool
-    r=$(on "$ip" "pcs status 2>/dev/null | grep -c Started" || echo 0)
+    r=$(safe_count "$ip" "pcs status" 'Started')
     record t06 resources_on_survivor "$r" count
   fi
 done

@@ -200,7 +200,11 @@
         - systemctl enable --now qemu-guest-agent
       {% if vm.name == 'pgsql' %}
         - systemctl enable --now postgresql
-        - su - postgres -c "pgbench -i -s 50 postgres"
+        # `pgbench -i` DROPS AND RECREATES the pgbench tables. runcmd must be
+        # safe to execute more than once: cloud-init re-runs it for any
+        # instance-id it has not seen, and a destructive init makes that a data
+        # loss event rather than a no-op.
+        - su - postgres -c "psql -tAqc \"select to_regclass('public.pgbench_accounts')\" | grep -q pgbench_accounts || pgbench -i -s 50 postgres"
         - systemctl daemon-reload
         - systemctl enable --now pgbench-load
       {% endif %}

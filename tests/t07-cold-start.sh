@@ -63,6 +63,6 @@ else
   fail "guests did not start — check boot ordering"
 fi
 
-q=$(n1 "pcs quorum status 2>/dev/null | grep -c 'Quorate:.*Yes'" || echo 0)
+q=$(safe_count "$NODE1" "pcs quorum status" 'Quorate:.*Yes')
 record t07 quorate_after_cold_start "$q" bool
 wait_settled
