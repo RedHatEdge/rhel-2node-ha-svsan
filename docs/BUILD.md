@@ -12,6 +12,10 @@ particular setting matters.
 
 ## What you need first
 
+Hardware and software. **If you are starting from nothing, read Stage 0 below
+first** — it covers the accounts, the build host, and the order things have to
+happen in.
+
 | | |
 |---|---|
 | 2 × x86-64 servers | with BMCs reachable for fencing. Lab: Simply NUC EE-2000 |
@@ -20,7 +24,7 @@ particular setting matters.
 | The **Windows/Hyper-V** package | contains the appliance image |
 | The **vCenter plugin** package | only used for the witness binaries |
 | A trial licence | from StorMagic — see below |
-| A control node | with Ansible, `qemu-img`, `podman`, `7z` |
+| A control node | RHEL 9, subscribed — see Stage 0. Builds the image and runs Ansible; not part of the cluster |
 
 Both packages and a trial licence come from StorMagic's free trial:
 **<https://stormagic.com/trial/>**. They are also on a free support account at
@@ -33,6 +37,152 @@ byte-identical (MD5 `90d8e64e678dd8f682f33cd6cc112a2b`) but the OVA declares
 configuration through the VMware Tools channel — which KVM does not have. The VHD
 carries no such envelope and the appliance falls back to DHCP and its own web
 wizard.
+
+---
+
+## Stage 0 — before you touch the servers
+
+If you have two machines out of their boxes and nothing else, start here. This
+stage is entirely about the things the rest of the guide assumes you already
+have.
+
+### The order, and why it is this order
+
+The installer ISO decides which machine is which **by MAC address**, so you need
+both MACs from both nodes *before* you can build it. But the nodes have no
+operating system yet, so you cannot ask them. That is the one genuinely awkward
+step, and it is resolved by reading the MACs out of firmware rather than from a
+running system.
+
+```
+1. accounts and subscriptions          you, on the web
+2. a build host                        one RHEL 9 machine or VM
+3. read the MACs out of BIOS/BMC       no OS needed
+4. write them into bootc/config.toml
+5. build the image, then the ISO       on the build host
+6. install both nodes from that ISO
+7. make discover                       now the nodes can describe themselves
+8. make substrate ... onwards          the rest of this guide
+```
+
+Steps 3 and 7 look similar but are not. Step 3 is you, reading two MACs off a
+screen so the installer can tell the machines apart. Step 7 is the cluster
+recording every disk and interface by an identifier that cannot move — which is
+a different job, done once there is an OS to ask.
+
+### 1. Accounts you will need
+
+| | | |
+|---|---|---|
+| **Red Hat** | developers.redhat.com | free Developer Subscription covers 16 systems; entitles RHEL and the bootc base image |
+| **registry.redhat.io** | same login | pulls the RHEL bootc base image |
+| **An image registry** | quay.io free tier, or any OCI registry | the nodes pull their OS from here, so it must be reachable from the store |
+| **StorMagic** | stormagic.com/trial | the appliance packages and a trial licence |
+
+The Red Hat account is the one to do first — the base image will not pull without
+it, and everything else waits on that.
+
+### 2. A build host
+
+One RHEL 9 machine or VM. It builds the OS image and runs Ansible; it does not
+become part of the cluster and can be switched off afterwards. Modest: 2 vCPU,
+8 GB RAM, **40 GB free disk** — image builds are large.
+
+```
+sudo subscription-manager register --username <you>
+sudo subscription-manager attach --auto
+sudo dnf -y install podman git make python3-pip
+```
+
+Then log in to both registries — the first pulls the base image, the second is
+where your built image goes:
+
+```
+podman login registry.redhat.io
+podman login <your-registry>
+```
+
+**Build on RHEL, not Fedora or a Mac.** A subscribed RHEL host has entitlements
+that podman passes into the build automatically, so the image can install RHEL
+packages with no further configuration. On an unsubscribed host you have to feed
+an activation key in as a build secret, which works but is a detour you do not
+need.
+
+### 3. Read the MACs out of firmware
+
+Two per node — the management NIC and the storage NIC. No operating system
+required:
+
+- **From the BMC web interface**, if the machines have one. Usually under System
+  or Network Inventory. This is also worth doing first because you need the BMC
+  reachable later for fencing.
+- **From the BIOS setup screen**, under the network or boot device list.
+- **From a PXE or live-boot screen**, which prints the MAC as it requests an
+  address.
+
+Write down which physical port each belongs to. Getting management and storage
+the wrong way round produces a node that installs cleanly and then cannot see its
+own storage network, which is a confusing thing to debug later.
+
+### 4. Put them in the MAC table
+
+`bootc/config.toml` carries one line per node:
+
+```
+control_mac|hostname|control_ip|storage_mac|storage_ip
+```
+
+That table is what makes a single ISO able to install both machines: each one
+matches its own MACs on boot and takes the matching hostname and addresses.
+Nothing else distinguishes them, so this table has to be right.
+
+Set your SSH public key in the same file while you are there — the build refuses
+to proceed with the placeholder still in place, deliberately, because an image
+you cannot log into is no use.
+
+### 5. Build the image and the ISO
+
+```
+cd bootc
+./build.sh --push --iso
+```
+
+The result is an installer ISO that installs either node. Write it to a USB stick
+or attach it through the BMC's virtual media.
+
+### 6. Install both nodes
+
+Boot each machine from the ISO. It matches MACs, picks the OS disk by size, and
+installs unattended. Nothing to answer.
+
+If you PXE boot rather than using media: **most BIOSes ship with the network
+stack disabled**, and it has to be turned on before the machine will PXE at all.
+
+### 7. Now let the nodes describe themselves
+
+```
+cp inventory/hosts.yml.example inventory/hosts.yml     # put your addresses in
+make discover
+```
+
+This runs against each node and writes `inventory/host_vars/<node>.yml`,
+recording disks by `/dev/disk/by-id/` and interfaces by MAC.
+
+**This is not optional and it is easy to skip**, because the rest of the guide
+does not obviously fail without it — it fails later, on the wrong disk. Kernel
+names move: `/dev/nvme0n1` can become `/dev/nvme1n1` after a reboot or a drive
+swap, and interface names shift when firmware changes. Anything written into
+configuration has to be pinned to something that cannot move, and this is the
+step that captures it.
+
+Read the generated files before continuing. If a node picked the wrong disk as
+its storage device, now is the moment to notice — not after it has been
+overwritten.
+
+### 8. Continue
+
+From here the rest of this guide applies, beginning with the networks section
+below.
 
 ---
 
@@ -57,18 +207,16 @@ own merits.
 
 ## B. Install the two nodes
 
-```
-cd bootc
-./build.sh                 # RHEL 9.8 bootc container image
-./build.sh --push --iso    # build, push, then make an installer ISO
-```
+Covered in Stage 0 steps 5 and 6 — this section is the detail behind them.
 
 One ISO installs both nodes. The kickstart matches the machine's own MACs against
-a table and emits the right hostname and static addresses; a second `%pre` picks
-the OS disk by size. That is what makes the same media work on both, and why the
-reversed NVMe enumeration between the two nodes is a non-issue.
+the table you filled in, and emits the right hostname and static addresses; a
+second `%pre` picks the OS disk by size rather than by kernel name. That is what
+makes the same media work on both, and why the reversed NVMe enumeration between
+the two nodes is a non-issue.
 
-PXE boot both. Two things that will cost you an hour each if you forget:
+If you PXE boot rather than using media, two things that will cost you an hour
+each if you forget:
 
 - **Network Stack must be enabled in BIOS.** It is off by default.
 - iPXE must use `${proxydhcp/next-server}`, not `${next-server}` — the latter
