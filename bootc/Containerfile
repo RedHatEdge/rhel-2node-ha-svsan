@@ -40,7 +40,7 @@ RUN --mount=type=secret,id=rhsm-key,required=false \
     set -eux; \
     if [ -s /run/secrets/rhsm-key ] 2>/dev/null; then \
       subscription-manager register \
-        --activationkey=<YOUR-ACTIVATION-KEY> /run/secrets/rhsm-key)" \
+        --activationkey="$(cat /run/secrets/rhsm-key)" \
         --org="$(cat /run/secrets/rhsm-org)" --force; \
       subscription-manager repos \
         --enable=rhel-9-for-x86_64-baseos-rpms \
