@@ -21,4 +21,12 @@
     - name: Discover, log in and bind multipath
       ansible.builtin.include_role:
         name: storage_svsan
+        tasks_from: verify_taps
+
+    # Reattaching an orphaned tap has to happen BEFORE discovery: an appliance
+    # whose interface is not on the bridge cannot be discovered, and the failure
+    # looks like a storage problem rather than a cabling one.
+    - name: Discover and attach the mirrored targets
+      ansible.builtin.include_role:
+        name: storage_svsan
         tasks_from: discover

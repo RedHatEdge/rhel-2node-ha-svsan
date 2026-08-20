@@ -1,0 +1,65 @@
+---
+# Confirm every VSA interface is really attached to the bridge libvirt claims.
+#
+# libvirt's domain XML says which bridge a tap belongs to. That is a statement of
+# intent, not a fact: if the bridge is rebuilt underneath a running guest -- which
+# reconfiguring host networking does -- the tap is silently orphaned. The domain
+# keeps running, `virsh domiflist` keeps reporting the intended bridge, and the
+# guest's NIC is simply not connected to anything.
+#
+# That is not hypothetical. It took this platform's management interface offline
+# for an hour and presented as a DHCP problem: the appliance displayed its last
+# known address, answered nothing, and its storage interface kept working because
+# only one of its two taps had been orphaned.
+#
+# Nothing in libvirt or Pacemaker detects this. So check it.
+
+- name: Find the VSA domain
+  ansible.builtin.command: virsh list --all --name
+  register: _doms
+  changed_when: false
+
+- name: Select the appliance domain
+  ansible.builtin.set_fact:
+    _vsa_dom: "{{ (_doms.stdout_lines | select('match', '^svsan-') | list | first) | default('') }}"
+
+- name: Compare each tap's intended bridge against its actual master
+  ansible.builtin.shell: |
+    set -o pipefail
+    virsh domiflist {{ _vsa_dom }} 2>/dev/null | tail -n +3 | grep -v '^$' | while read tap typ src rest; do
+      [ -n "$tap" ] || continue
+      master=$(ip -d link show "$tap" 2>/dev/null | grep -o 'master [a-z0-9_-]*' | awk '{print $2}')
+      if [ "$master" != "$src" ]; then
+        echo "ORPHANED $tap intended=$src actual=${master:-none}"
+      fi
+    done
+  args:
+    executable: /bin/bash
+  register: _orphans
+  changed_when: false
+  failed_when: false
+  when: _vsa_dom | length > 0
+
+- name: Reattach any orphaned tap to its bridge
+  ansible.builtin.shell: |
+    set -e
+    tap=$(echo "{{ item }}" | awk '{print $2}')
+    br=$(echo "{{ item }}"  | awk -F'intended=' '{print $2}' | awk '{print $1}')
+    ip link set "$tap" master "$br"
+    ip link set "$tap" up
+    echo "reattached $tap -> $br"
+  args:
+    executable: /bin/bash
+  loop: "{{ _orphans.stdout_lines | default([]) }}"
+  when:
+    - _vsa_dom | length > 0
+    - _orphans.stdout_lines | default([]) | length > 0
+  register: _reattached
+
+- name: Report what was found
+  ansible.builtin.debug:
+    msg: >-
+      {{ 'All ' ~ _vsa_dom ~ ' interfaces are attached to their intended bridges.'
+         if (_orphans.stdout_lines | default([]) | length == 0)
+         else 'Reattached orphaned interfaces: ' ~ (_orphans.stdout_lines | join('; ')) }}
+  when: _vsa_dom | length > 0
