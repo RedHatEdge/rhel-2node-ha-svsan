@@ -38,6 +38,11 @@ decisions, most importantly that the storage NIC must be a real bridge: a macvta
 guest can reach every host except the one it runs on, so the local path would not
 form.
 
+**Architecture diagram:** [`docs/diagrams/svsan-architecture.png`](docs/diagrams/svsan-architecture.png)
+— both hosts, the appliance on each, the synchronous mirror, the host-side
+initiator path, and the witness. [`svsan-quorum.png`](docs/diagrams/svsan-quorum.png)
+covers why the witness exists.
+
 ## Two quorum systems, and they are not the same thing
 
 | | arbitrates | port |
