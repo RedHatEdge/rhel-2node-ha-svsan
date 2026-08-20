@@ -107,7 +107,7 @@
 
 <figure>
   <div class="figwrap">
-  <svg viewBox="0 0 1240 880" role="img" aria-label="Two RHEL 9 hosts each running a StorMagic VSA on LVM-backed storage, mirroring synchronously over a storage VLAN, with a witness container on a third RHEL host arbitrating quorum.">
+  <svg viewBox="0 0 1240 880" role="img" aria-label="Two RHEL 9 hosts each running a StorMagic VSA on LVM-backed storage, mirroring synchronously over a storage network, with a witness container on a third RHEL host arbitrating quorum.">
     <defs>
       <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
         <path d="M0,0 L10,5 L0,10 z" fill="context-stroke"/>
@@ -146,7 +146,7 @@
     <rect x="284" y="346" width="212" height="30" rx="2" fill="#fafafa" stroke="#d2d2d2"/>
     <text x="296" y="366" font-family="Red Hat Mono, monospace" font-size="10.5" fill="#151515">pool1 · vdc 90 GB</text>
     <text x="72" y="399" font-family="Red Hat Mono, monospace" font-size="10.5" fill="#004b95">iSCSI target :3260 → 172.18.8.20</text>
-    <text x="72" y="412" font-family="Red Hat Mono, monospace" font-size="9.5" fill="#6a6e73">all disks virtio · appliance reports “KVM:virtio4”</text>
+    <text x="72" y="412" font-family="Red Hat Mono, monospace" font-size="9.5" fill="#6a6e73">all disks virtio · appliance reports “KVM:virtio3”</text>
 
     <rect x="728" y="292" width="456" height="128" rx="3" fill="#ffffff" stroke="#f0ab00" stroke-width="1.6"/>
     <text x="744" y="315" font-family="Red Hat Display, sans-serif" font-size="13" font-weight="500" fill="#795600">VSA guest · svsan-node2 “vsa2”</text>
@@ -156,7 +156,7 @@
     <rect x="956" y="346" width="212" height="30" rx="2" fill="#fafafa" stroke="#d2d2d2"/>
     <text x="968" y="366" font-family="Red Hat Mono, monospace" font-size="10.5" fill="#151515">pool1 · vdc 90 GB</text>
     <text x="744" y="399" font-family="Red Hat Mono, monospace" font-size="10.5" fill="#004b95">iSCSI target :3260 → 172.18.8.21</text>
-    <text x="744" y="412" font-family="Red Hat Mono, monospace" font-size="9.5" fill="#6a6e73">all disks virtio · appliance reports “KVM:virtio4”</text>
+    <text x="744" y="412" font-family="Red Hat Mono, monospace" font-size="9.5" fill="#6a6e73">all disks virtio · appliance reports “KVM:virtio3”</text>
 
     <!-- synchronous mirror -->
     <path d="M512,356 L728,356" stroke="#0066cc" stroke-width="2.4" fill="none" marker-end="url(#ar)" marker-start="url(#ar)"/>
@@ -228,29 +228,29 @@
     <!-- bridges -->
     <rect x="56" y="752" width="222" height="56" rx="2" fill="#ffffff" stroke="#d2d2d2"/>
     <text x="68" y="772" font-family="Red Hat Mono, monospace" font-size="10.5" fill="#151515">br-lan · 172.16.7.10</text>
-    <text x="68" y="787" font-family="Red Hat Mono, monospace" font-size="9.5" fill="#6a6e73">VLAN 12 · management</text>
+    <text x="68" y="787" font-family="Red Hat Mono, monospace" font-size="9.5" fill="#6a6e73">enp2s0 · management</text>
     <text x="68" y="800" font-family="Red Hat Mono, monospace" font-size="9.5" fill="#6a6e73">corosync ring0 · mirror: Failover</text>
 
     <rect x="290" y="752" width="222" height="56" rx="2" fill="#ffffff" stroke="#0066cc"/>
     <text x="302" y="772" font-family="Red Hat Mono, monospace" font-size="10.5" fill="#004b95">br-repl · 172.18.8.10</text>
-    <text x="302" y="787" font-family="Red Hat Mono, monospace" font-size="9.5" fill="#6a6e73">VLAN 18 · storage / mirror</text>
+    <text x="302" y="787" font-family="Red Hat Mono, monospace" font-size="9.5" fill="#6a6e73">enp3s0 · storage / mirror</text>
     <text x="302" y="800" font-family="Red Hat Mono, monospace" font-size="9.5" fill="#0066cc">corosync ring1 · mirror: Preferred</text>
 
     <rect x="728" y="752" width="222" height="56" rx="2" fill="#ffffff" stroke="#d2d2d2"/>
     <text x="740" y="772" font-family="Red Hat Mono, monospace" font-size="10.5" fill="#151515">br-lan · 172.16.7.11</text>
-    <text x="740" y="787" font-family="Red Hat Mono, monospace" font-size="9.5" fill="#6a6e73">VLAN 12 · management</text>
+    <text x="740" y="787" font-family="Red Hat Mono, monospace" font-size="9.5" fill="#6a6e73">enp2s0 · management</text>
     <text x="740" y="800" font-family="Red Hat Mono, monospace" font-size="9.5" fill="#6a6e73">corosync ring0 · mirror: Failover</text>
 
     <rect x="962" y="752" width="222" height="56" rx="2" fill="#ffffff" stroke="#0066cc"/>
     <text x="974" y="772" font-family="Red Hat Mono, monospace" font-size="10.5" fill="#004b95">br-repl · 172.18.8.11</text>
-    <text x="974" y="787" font-family="Red Hat Mono, monospace" font-size="9.5" fill="#6a6e73">VLAN 18 · storage / mirror</text>
+    <text x="974" y="787" font-family="Red Hat Mono, monospace" font-size="9.5" fill="#6a6e73">enp3s0 · storage / mirror</text>
     <text x="974" y="800" font-family="Red Hat Mono, monospace" font-size="9.5" fill="#0066cc">corosync ring1 · mirror: Preferred</text>
 
     <path d="M512,780 L728,780" stroke="#0066cc" stroke-width="1.6" fill="none" stroke-dasharray="3 4"/>
     <text x="620" y="774" font-family="Red Hat Mono, monospace" font-size="9.5" fill="#6a6e73" text-anchor="middle">172.18.8.0/24</text>
   </svg>
   </div>
-  <figcaption>The full store stack. Storage rises from a single NVMe through one LVM volume group, which is carved so that the DRBD option and the SvSAN option hold separate volumes and can run side by side. Each host passes <code>lv-svsan-pool</code> into its VSA as a raw block device; the two VSAs mirror synchronously across the storage VLAN; and each host then logs back in over iSCSI to the appliance running on top of it.</figcaption>
+  <figcaption>The full store stack. Storage rises from a single NVMe through one LVM volume group, which is carved so that the DRBD option and the SvSAN option hold separate volumes and can run side by side. Each host passes <code>lv-svsan-pool</code> into its VSA as a raw block device; the two VSAs mirror synchronously across the storage network; and each host then logs back in over iSCSI to the appliance running on top of it.</figcaption>
 </figure>
 
 <div class="notes">
@@ -264,7 +264,7 @@
   </div>
   <div class="note mirror">
     <p class="k">Two rings, one job each</p>
-    <p>Management on VLAN 12, mirror and iSCSI on VLAN 18. Untick iSCSI on the management interface or replication drifts onto the store LAN — SvSAN will happily use any enabled path.</p>
+    <p>Management on enp2s0, mirror and iSCSI on enp3s0. Untick iSCSI on the management interface or replication drifts onto the store LAN — SvSAN will happily use any enabled path.</p>
   </div>
   <div class="note mirror">
     <p class="k">Preferred, not exclusive</p>
@@ -320,7 +320,7 @@
 <div class="tablewrap">
 <table>
   <thead>
-    <tr><th>Component</th><th>Management · VLAN 12</th><th>Storage · VLAN 18</th><th>Identity</th></tr>
+    <tr><th>Component</th><th>Management · enp2s0</th><th>Storage · enp3s0</th><th>Identity</th></tr>
   </thead>
   <tbody>
     <tr><td>node1 · RHEL host</td><td class="m">172.16.7.10</td><td class="m"><span class="a">172.18.8.10</span></td><td class="m">—</td></tr>

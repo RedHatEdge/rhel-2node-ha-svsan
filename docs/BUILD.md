@@ -74,6 +74,20 @@ PXE boot both. Two things that will cost you an hour each if you forget:
 - iPXE must use `${proxydhcp/next-server}`, not `${next-server}` — the latter
   resolves to the gateway and breaks every menu entry.
 
+### If your image repository is private
+
+A bootc node updates by pulling its own OS image, so a private repository means
+the node needs credentials or it cannot update at all — `bootc upgrade` fails
+with `unauthorized` and the node quietly stops receiving updates, including
+kernel CVEs, while looking perfectly healthy.
+
+Set `bootc_registry_auth` in your inventory to a pull-only credential and the
+role writes it to `/etc/ostree/auth.json`. It then runs `bootc upgrade --check`
+and reports loudly if the node still cannot reach its image. A read-only robot
+token is the right credential here — a node never needs to push.
+
+Public repository: skip this, no credential needed.
+
 ## C. Cluster, quorum and fencing
 
 ```
@@ -233,6 +247,16 @@ make svsan-attach
 make svsan-tune
 ```
 
+`make svsan-attach` first checks that every appliance interface is actually
+attached to the bridge libvirt claims. That is not paranoia: libvirt's domain XML
+records intent, and if a bridge is rebuilt beneath a running guest the tap is
+silently orphaned — the domain runs, `virsh domiflist` still reports the intended
+bridge, and the NIC is connected to nothing. It presents as a DHCP or storage
+failure and is invisible from either. Nothing in libvirt or Pacemaker detects it.
+
+```
+```
+
 `svsan-attach` discovers, logs in, binds multipath aliases, and **discards node
 records for portals outside the storage subnet** — `sendtargets` advertises every
 portal a target is on, including management, so without this the host runs iSCSI
@@ -272,14 +296,59 @@ healthy:
 - **Ports 49152-49215** open, or migration authenticates, starts, then fails with
   "no route to host"
 
-## N. Verify
+## N. Operator access — Cockpit
+
+```
+make admin
+```
+
+Creates the `admin` account (in `wheel`, `libvirt` and `qemu`), sets a password
+for it and for root, and brings up Cockpit on **:9090**.
+
+`make admin` touches no networking, so it is safe against a running cluster.
+Prefer it over a full `make substrate` when access is all you are changing —
+substrate reconfigures the storage NIC, and on a live system that drops storage.
+
+Three things about this are easy to get wrong:
+
+- **Cockpit authenticates through PAM, not SSH keys.** A key-only account cannot
+  log into the web UI at all, so the account needs a password even if you only
+  ever use keys over SSH. The role refuses to create an account with neither.
+- **Cockpit's Machines page needs `libvirt-dbus`.** It reaches libvirt over
+  D-Bus, not by talking to `libvirtd` or `virtqemud`. Without it the page reports
+  *"Virtualization service (libvirt) is not active"* while `virsh` on the same
+  host lists every guest — so `virsh` is not a valid check for this.
+- **`libvirt-dbus` runs as the `libvirtdbus` user**, and the D-Bus policy grants
+  it ownership of `org.libvirt`. On an image-mode host the RPM's scriptlet user
+  does not survive into the deployed system, which is why the image declares it
+  in `/usr/lib/sysusers.d`.
+
+Change the demo password before this touches anything real — see
+`roles/common_base/defaults/main.yml`.
+
+## O. Verify
 
 ```
 pcs status                                  # both guests Started, no failures
-multipath -ll                               # 4 paths
+multipath -ll                               # 4 paths, all "active ready"
 ss -tn '( sport = :4174 )'                  # 2 witness connections
 curl http://<pos-guest>:8080/               # live transaction view
+busctl --system list | grep org.libvirt     # Cockpit can see the guests
+virsh capabilities | grep -A1 '<uuid>'      # MUST differ between the two hosts
 ```
+
+Two of these are worth understanding rather than just running.
+
+**The host UUID must differ between nodes.** Many small-form-factor machines ship
+the same DMI system UUID in firmware on every unit; libvirt then believes both
+hosts are the same machine and refuses to migrate with *"Attempt to migrate guest
+to the same host"*. The fix is `host_uuid_source = "machine-id"`, and it has to be
+set in the config file of the daemon actually in use — `virtqemud.conf` for the
+modular daemons, `libvirtd.conf` for the monolithic one. Setting it in the wrong
+file looks identical to not setting it at all.
+
+**`org.libvirt` must be on the system bus**, or Cockpit shows no virtual machines
+regardless of how healthy libvirt is.
 
 From the hosts, never from a workstation — the storage segment is not routed.
 
