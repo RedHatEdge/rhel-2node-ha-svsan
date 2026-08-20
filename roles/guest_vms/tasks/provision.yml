@@ -215,7 +215,7 @@
     dest: "/tmp/cidata-{{ vm.name }}/meta-data"
     mode: "0644"
     content: |
-      instance-id: {{ vm.name }}-{{ ansible_date_time.epoch }}
+      instance-id: {{ vm.name }}-{{ ansible_date_time.epoch if (guest_rebuild | default(false) | bool) else 'stable' }}
       local-hostname: {{ vm.name }}
 
 - name: Build the cloud-init seed ISO
@@ -314,10 +314,18 @@
 
 - name: Re-check domain existence after a MAC correction
   ansible.builtin.command: "virsh dominfo {{ vm.name }}"
-  register: _dom
+  register: _dom_recheck
   changed_when: false
   failed_when: false
   when: _macfix.changed | default(false)
+
+# A SKIPPED task still replaces its registered variable, with a skip result that
+# carries no rc. Re-registering _dom above erased the original probe whenever the
+# MAC already matched, and the next _dom.rc raised "object of type 'dict' has no
+# attribute 'rc'".
+- name: Resolve whether the domain exists
+  ansible.builtin.set_fact:
+    _dom_exists: "{{ (_dom_recheck.rc | default(_dom.rc)) == 0 }}"
 
 - name: Define the guest
   ansible.builtin.shell: |
@@ -332,7 +340,7 @@
       --network bridge={{ lan_bridge }},model=virtio,mac={{ guest_macs[vm.name] }} \
       --channel unix,target_type=virtio,name=org.qemu.guest_agent.0 \
       --graphics none --noautoconsole --osinfo detect=on,require=off
-  when: _dom.rc != 0
+  when: not _dom_exists
   changed_when: true
 
 # Pacemaker needs the domain XML on BOTH nodes so either can start the guest.

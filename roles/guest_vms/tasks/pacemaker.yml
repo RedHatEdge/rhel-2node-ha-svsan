@@ -51,7 +51,7 @@
 - name: Order filesystem before guest
   ansible.builtin.command: >
     pcs constraint order start fs-{{ 'store-a' if vm.home_node == node1_name else 'store-b' }}
-    then start vm-{{ vm.name }} INFINITY
+    then start vm-{{ vm.name }} kind=Mandatory
   loop: "{{ guest_vms }}"
   loop_control:
     loop_var: vm
@@ -60,7 +60,12 @@
   delegate_to: "{{ node1_name }}"
   register: _oc
   changed_when: _oc.rc == 0
-  failed_when: _oc.rc not in [0, 1]
+  # rc 1 is only acceptable when pcs says the constraint already exists. A bare
+  # INFINITY is rejected as "missing value of 'INFINITY' option", also rc 1 --
+  # tolerating that left the cluster with no ordering constraints at all.
+  failed_when:
+    - _oc.rc != 0
+    - "'already exists' not in (_oc.stderr | default('')) | lower"
 
 - name: Wait for the cluster to settle
   ansible.builtin.command: crm_resource --wait
