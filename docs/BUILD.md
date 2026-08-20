@@ -186,6 +186,68 @@ below.
 
 ---
 
+## Using Ansible directly instead of make
+
+`make` is a thin wrapper. Every target runs an ordinary playbook, and you can run
+them yourself if you prefer — nothing in this repository requires make.
+
+What the wrapper does add is worth knowing before you skip it:
+
+- **A pinned toolchain.** `make venv` builds a virtualenv from `requirements.txt`
+  (`ansible-core>=2.16,<2.20`) and installs the collections into `./collections`,
+  deliberately never touching system Python. Run playbooks with a distro Ansible
+  and you get whatever version it ships, against collections that may not match.
+- **The flags that matter.** Several playbooks behave differently depending on
+  `storage_backend`, and `00-substrate.yml` reconfigures host networking based on
+  it. Running that one with the wrong value against a live cluster tears down the
+  storage bridge and drops every path — while reporting success. `make substrate`
+  refuses to run without an explicit backend for exactly that reason. If you call
+  the playbook directly, pass it yourself and pass it correctly.
+
+Activate the virtualenv first so you get the pinned Ansible:
+
+```
+make venv                      # once
+source .venv/bin/activate
+```
+
+Run from the repository root — `ansible.cfg` there supplies the inventory path,
+the roles path and the collections path, so the commands below need no `-i`.
+
+Then each target maps to:
+
+| make | ansible-playbook |
+|---|---|
+| `make discover` | `ansible-playbook playbooks/01-discover.yml` |
+| `make substrate` | `ansible-playbook playbooks/00-substrate.yml -e storage_backend=svsan -e fence_backend=redfish` |
+| `make admin` | `… playbooks/00-substrate.yml -e storage_backend=svsan -e fence_backend=redfish --tags admin` |
+| `make witness` | `… playbooks/10-storage-svsan.yml -e storage_backend=svsan --limit arbiter` |
+| `make svsan` | `… playbooks/10-storage-svsan.yml -e storage_backend=svsan -e svsan_attach_san_nic=false` |
+| `make svsan-attach-san` | `… playbooks/10-storage-svsan.yml -e storage_backend=svsan -e svsan_attach_san_nic=true --limit cluster` |
+| `make svsan-attach` | `… playbooks/11-present-targets.yml -e storage_backend=svsan` |
+| `make svsan-tune` | `… playbooks/12-failover-tuning.yml -e storage_backend=svsan` |
+| `make guests` | `… playbooks/30-guests.yml -e storage_backend=svsan` |
+
+`FENCE` defaults to `redfish`; override with `make substrate FENCE=ipmilan` or by
+changing `-e fence_backend=`.
+
+The image build is not Ansible at all — `bootc/build.sh` is a shell script and is
+run directly either way.
+
+Useful additions when running playbooks by hand:
+
+```
+--check --diff        # dry run, show what would change
+--limit node1         # one host
+--tags admin          # one part of a play
+-v                    # or -vvv when something is not doing what you expect
+```
+
+`--check` is worth knowing about: several plays in here are destructive by
+design, and a dry run tells you which tasks would fire before they do.
+
+---
+
 ## A. Networks — get this right before anything else
 
 | segment | subnet | carries |
