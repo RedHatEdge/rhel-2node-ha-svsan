@@ -115,6 +115,73 @@
     - is_bootc | bool
     - _cockpit_rpm.rc != 0
 
+# root needs a password too, and for a specific reason: Cockpit authenticates
+# through PAM. A key-only root cannot log into the web UI, and on a console --
+# the one place you end up when the network is broken -- a locked root leaves no
+# way in at all. Keys remain the way in over SSH; this is the fallback.
+- name: Set the root password
+  ansible.builtin.user:
+    name: root
+    password: "{{ root_password_hash }}"
+    update_password: always
+  when: root_password_hash is defined
+  no_log: true
+
+# Cockpit's Machines page drives libvirt, and RHEL 9 can run libvirt two ways:
+# the monolithic libvirtd, or the modular per-driver daemons (virtqemud and
+# friends). Both work for virsh, which is why "virsh lists the guests" is NOT a
+# valid check that Cockpit will see them -- virsh talks to whichever is running.
+#
+# cockpit-machines 3xx drives the MODULAR daemons. On a host where libvirtd is
+# running instead, its Machines page reports "Virtualization service (libvirt) is
+# not active" and shows nothing, while virsh on the same box lists every guest.
+#
+# The two modes conflict, so enforce one. Modular is correct for current
+# cockpit-machines and is RHEL 9's default; a host that has been switched to
+# monolithic -- or an older image that shipped that way -- needs moving back.
+- name: Stop the monolithic libvirt daemon
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    enabled: false
+    state: stopped
+  loop:
+    - libvirtd.service
+    - libvirtd.socket
+    - libvirtd-ro.socket
+  failed_when: false
+  when: libvirt_modular | default(true) | bool
+
+- name: Enable the modular libvirt daemons for Cockpit
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    enabled: true
+    state: started
+  loop:
+    - virtqemud.socket
+    - virtnetworkd.socket
+    - virtstoraged.socket
+    - virtnodedevd.socket
+  failed_when: false
+  when: libvirt_modular | default(true) | bool
+
+# Check the SOCKET, not the service. virtqemud is socket-activated: the service
+# sits inactive until something connects, so testing the service right after
+# enabling it reports "inactive" on a perfectly healthy host. The socket being
+# listening is what determines whether Cockpit can reach libvirt.
+- name: Confirm the socket Cockpit connects to is listening
+  ansible.builtin.command: systemctl is-active virtqemud.socket
+  register: _virtqemud
+  changed_when: false
+  failed_when: false
+
+- name: Report whether Cockpit will see the guests
+  ansible.builtin.debug:
+    msg: >-
+      {{ 'virtqemud.socket listening — Cockpit Machines will list the guests.'
+         if _virtqemud.stdout | trim == 'active'
+         else 'virtqemud.socket is ' ~ (_virtqemud.stdout | trim) ~ ' — Cockpit Machines will report
+               "Virtualization service (libvirt) is not active" even though virsh works.' }}
+
 - name: Enable Cockpit
   ansible.builtin.systemd:
     name: cockpit.socket

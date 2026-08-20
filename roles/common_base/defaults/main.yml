@@ -23,9 +23,32 @@ admin_ssh_key: ""
 # cannot log into the web UI at all. If you want Cockpit, this has to be set.
 # The role asserts that at least one of password/key is present rather than
 # silently creating an account nobody can use.
-# admin_password_hash: "$6$..."
+#
+# These are SHA-512 crypt hashes, not plaintext. Generate your own with:
+#     mkpasswd --method=sha-512
+# or
+#     python3 -c 'import crypt;print(crypt.crypt("YOURPASS", crypt.mksalt(crypt.METHOD_SHA512)))'
+#
+# The defaults below are a WELL-KNOWN DEMO PASSWORD, published deliberately so a
+# lab comes up usable out of the box. They are not a secret and must not be used
+# anywhere real -- override both in your own inventory before this touches a
+# machine that matters.
+#
+#     demo password: R3dh4t123!
+demo_password_hash: "$6$YaCI5VrLmddG.KZJ$Gvf7MUr2RjoAghC/IJ32Ch9oXqH1ldchXuPS1901h2bdXUTu0JSXcBFgoiO7S4yq5B3/afDRhUPolMij/CUe0."
+
+admin_password_hash: "{{ demo_password_hash }}"
+root_password_hash:  "{{ demo_password_hash }}"
 
 # Cockpit is deliberately NOT opened on the storage/replication zone -- that
 # segment carries iSCSI and DRBD traffic and has no business serving a web UI.
 cockpit_firewall_zones:
   - public
+
+# cockpit-machines drives the MODULAR libvirt daemons (virtqemud and friends).
+# On a host running the monolithic libvirtd instead, Cockpit's Machines page
+# reports "Virtualization service (libvirt) is not active" and lists nothing,
+# while virsh on the same host works fine -- so virsh is not a valid check.
+# Set false only if you deliberately want monolithic and accept losing Cockpit's
+# VM management.
+libvirt_modular: true

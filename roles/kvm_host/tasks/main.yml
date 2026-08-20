@@ -67,3 +67,9 @@
 
 - name: Exchange root SSH keys for migration_transport=ssh
   ansible.builtin.include_tasks: ssh_keys.yml
+
+# Guests survive a host-networking change; their taps do not always survive it
+# attached. Check intent against reality every run.
+- name: Verify guest interfaces are attached to their bridges
+  ansible.builtin.include_tasks: verify_taps.yml
+  tags: [network, taps]

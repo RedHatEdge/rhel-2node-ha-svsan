@@ -1,0 +1,65 @@
+---
+# Confirm every running guest's tap is really attached to the bridge libvirt
+# claims, and reattach any that are not.
+#
+# libvirt's domain XML records intent, not fact. If a bridge is rebuilt beneath a
+# running guest -- which reconfiguring host networking does -- the tap is
+# silently orphaned: the domain keeps running, `virsh domiflist` keeps reporting
+# the intended bridge, and the NIC is connected to nothing.
+#
+# This cost an hour on this platform. A storage appliance's management interface
+# went dark while its storage interface kept working, because only one of its two
+# taps was orphaned. It presented as a DHCP failure -- the appliance displayed its
+# last known address and answered nothing -- and rebooting it to "renew the lease"
+# changed nothing, because the interface was not attached to anything. DHCP was
+# never involved: the moment the tap was put back on the bridge, a lease arrived
+# in under a minute.
+#
+# Applies to every guest, not just the appliance. Nothing in libvirt or Pacemaker
+# compares intent against reality, so do it here.
+
+- name: List running guests
+  ansible.builtin.command: virsh list --name
+  register: _running
+  changed_when: false
+  failed_when: false
+
+- name: Find taps that are not on the bridge libvirt claims
+  ansible.builtin.shell: |
+    set -o pipefail
+    for d in $(virsh list --name 2>/dev/null | grep -v '^$'); do
+      virsh domiflist "$d" 2>/dev/null | tail -n +3 | grep -v '^$' | while read tap typ src rest; do
+        [ -n "$tap" ] || continue
+        [ "$typ" = "bridge" ] || continue
+        master=$(ip -d link show "$tap" 2>/dev/null | grep -o 'master [a-z0-9_.-]*' | awk '{print $2}')
+        if [ "$master" != "$src" ]; then
+          echo "$d $tap $src ${master:-none}"
+        fi
+      done
+    done
+  args:
+    executable: /bin/bash
+  register: _orphans
+  changed_when: false
+  failed_when: false
+
+- name: Reattach orphaned taps
+  ansible.builtin.shell: |
+    set -e
+    tap=$(echo "{{ item }}" | awk '{print $2}')
+    br=$(echo "{{ item }}"  | awk '{print $3}')
+    ip link set "$tap" master "$br"
+    ip link set "$tap" up
+  args:
+    executable: /bin/bash
+  loop: "{{ _orphans.stdout_lines | default([]) }}"
+  when: _orphans.stdout_lines | default([]) | length > 0
+
+- name: Report
+  ansible.builtin.debug:
+    msg: >-
+      {{ 'All guest interfaces are on their intended bridges ('
+          ~ (_running.stdout_lines | default([]) | length) ~ ' running).'
+         if (_orphans.stdout_lines | default([]) | length == 0)
+         else 'Reattached orphaned taps (guest tap intended actual): '
+              ~ (_orphans.stdout_lines | join('; ')) }}

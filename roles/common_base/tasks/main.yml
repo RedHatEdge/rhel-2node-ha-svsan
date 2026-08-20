@@ -68,10 +68,19 @@
     policy: targeted
     state: enforcing
 
+# apply: is required -- tags on an include_tasks gate the include itself but do
+# NOT propagate to the tasks inside it, so `--tags admin` would run the include
+# and then skip everything it included.
 - name: Operator access — admin account and Cockpit
-  ansible.builtin.include_tasks: admin_access.yml
+  ansible.builtin.include_tasks:
+    file: admin_access.yml
+    apply:
+      tags: [admin]
   tags: [admin]
 
 - name: Registry credentials for image updates
-  ansible.builtin.include_tasks: bootc_registry_auth.yml
+  ansible.builtin.include_tasks:
+    file: bootc_registry_auth.yml
+    apply:
+      tags: [admin]
   tags: [admin]
