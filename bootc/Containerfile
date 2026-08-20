@@ -64,6 +64,22 @@ RUN dnf -y install \
  && dnf clean all
 
 # ---------------------------------------------------------------------------
+# 2b. Cockpit — browser management on :9090
+#     cockpit-machines drives libvirt (the store's guests), cockpit-podman the
+#     containers, cockpit-storaged the disks. Installed in the image rather than
+#     added later: on an image-mode host nothing installed at runtime survives a
+#     reboot, so anything an operator is expected to rely on has to be here.
+# ---------------------------------------------------------------------------
+RUN dnf -y install \
+      cockpit cockpit-ws cockpit-system cockpit-bridge \
+      cockpit-machines cockpit-podman cockpit-storaged \
+      cockpit-networkmanager \
+      podman \
+ && dnf clean all \
+ && systemctl enable cockpit.socket
+
+# ---------------------------------------------------------------------------
+---------------------------------------------------------------------------
 # 3. High availability
 #    corosync-qdevice is included so the node can join the remote qnetd arbiter.
 #    knet is the default and only supported transport on RHEL 9.
@@ -120,7 +136,8 @@ RUN echo drbd > /etc/modules-load.d/drbd.conf
 #    only appears with SELinux enforcing — so it looks like a DRBD problem and
 #    is not one. Relabel the agent as the ordinary executable it is.
 RUN semanage fcontext -a -t bin_t '/usr/lib/ocf/resource\.d/linbit/drbd' 2>/dev/null || true; \
-    chcon -t bin_t /usr/lib/ocf/resource.d/linbit/drbd
+    chcon -t bin_t /usr/lib/ocf/resource.d/linbit/drbd 2>/dev/null || \
+      echo 'note: chcon skipped (build fs rejects the xattr); semanage rule applies on relabel'
 
 # ---------------------------------------------------------------------------
 # 7. Services

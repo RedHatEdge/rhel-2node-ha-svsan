@@ -67,3 +67,11 @@
   ansible.posix.selinux:
     policy: targeted
     state: enforcing
+
+- name: Operator access — admin account and Cockpit
+  ansible.builtin.include_tasks: admin_access.yml
+  tags: [admin]
+
+- name: Registry credentials for image updates
+  ansible.builtin.include_tasks: bootc_registry_auth.yml
+  tags: [admin]

@@ -24,8 +24,20 @@ record t05 resources_still_started "$vms" count
 echo "Restoring arbiter..."
 n1 "iptables -D OUTPUT -d $QNETD -j DROP" || true
 n2 "iptables -D OUTPUT -d $QNETD -j DROP" || true
-sleep 20
-after=$(safe_count "$NODE1" "pcs quorum status" 'Qdevice.*A,V')
+
+# The old check counted lines matching 'Qdevice.*A,V'. In pcs output the A,V,NMW
+# flags sit on the NODE lines and the "Qdevice" line carries none, so that
+# pattern can never match and the test always recorded 0 -- reporting a failed
+# rejoin every time while the qdevice was in fact healthy. "Flags: ... Qdevice"
+# is the definitive signal. Poll for it rather than sleeping a flat 20s, which
+# was also simply too short.
+after=0
+for _ in $(seq 1 24); do
+  if n1 "pcs quorum status 2>/dev/null | grep -qE '^Flags:.*Qdevice'" 2>/dev/null; then
+    after=1; break
+  fi
+  sleep 5
+done
 record t05 qdevice_revote "$after" bool
 
 [ "$during" -eq 1 ] && echo "  PASS: store stayed quorate without the arbiter" \

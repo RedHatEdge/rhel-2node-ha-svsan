@@ -1,0 +1,52 @@
+---
+# Credentials for pulling the node image.
+#
+# A bootc node updates by pulling its own OS image, so if the image repository
+# is private the node needs credentials to update at all. Without them
+# `bootc upgrade` fails with "unauthorized" and the node silently stops
+# receiving updates -- including kernel CVEs -- while otherwise looking healthy.
+#
+# bootc reads /etc/ostree/auth.json. Give it a token that can only PULL: a node
+# has no reason to be able to push, and a read-only robot credential can be
+# rotated without touching a personal account. At estate scale that difference
+# matters.
+#
+# Skip entirely by leaving bootc_registry_auth undefined, which is correct when
+# the repository is public.
+
+- name: Ensure /etc/ostree exists
+  ansible.builtin.file:
+    path: /etc/ostree
+    state: directory
+    mode: "0755"
+  when: bootc_registry_auth is defined
+
+- name: Install the registry pull secret
+  ansible.builtin.copy:
+    dest: /etc/ostree/auth.json
+    content: "{{ bootc_registry_auth | to_nice_json }}\n"
+    mode: "0600"
+    owner: root
+    group: root
+  when: bootc_registry_auth is defined
+  no_log: true
+
+- name: Confirm the node can actually reach its own image
+  ansible.builtin.command: bootc upgrade --check
+  register: _bootc_check
+  changed_when: false
+  failed_when: false
+  when: is_bootc | bool
+
+# Worth failing loudly rather than discovering it at patch time: a node that
+# cannot pull its image is a node that cannot be updated.
+- name: Report whether updates are reachable
+  ansible.builtin.debug:
+    msg: >-
+      {{ 'Image reachable — bootc updates will work.'
+         if _bootc_check.rc == 0
+         else 'CANNOT REACH IMAGE: ' ~ (_bootc_check.stderr | default('') | trim) ~
+              ' — this node cannot be updated until that is fixed.' }}
+  when:
+    - is_bootc | bool
+    - _bootc_check is defined

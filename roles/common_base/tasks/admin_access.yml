@@ -1,0 +1,105 @@
+---
+# Operator access: a named admin account and Cockpit on :9090.
+#
+# Store staff and field engineers are not going to drive a two-node cluster from
+# pcs on a console. Cockpit gives them the guests (cockpit-machines), the
+# containers (cockpit-podman) and the disks (cockpit-storaged) in a browser,
+# which is what makes this handover-able.
+
+- name: Install Cockpit and podman
+  ansible.builtin.dnf:
+    name:
+      - cockpit
+      - cockpit-ws
+      - cockpit-system
+      - cockpit-bridge
+      - cockpit-machines
+      - cockpit-podman
+      - cockpit-storaged
+      - cockpit-networkmanager
+      - podman
+    state: present
+  # On an image-mode host these are already baked into the image; nothing
+  # installed at runtime would survive a reboot anyway.
+  when: not is_bootc | bool
+
+- name: Create the admin group
+  ansible.builtin.group:
+    name: "{{ admin_user }}"
+    state: present
+
+- name: Create the admin user
+  ansible.builtin.user:
+    name: "{{ admin_user }}"
+    group: "{{ admin_user }}"
+    # wheel carries sudo; libvirt and podman let Cockpit manage guests and
+    # containers as this user rather than pushing everyone to root.
+    groups: "{{ admin_extra_groups | join(',') }}"
+    append: true
+    shell: /bin/bash
+    create_home: true
+    password: "{{ admin_password_hash | default(omit) }}"
+    update_password: "{{ 'always' if admin_password_hash is defined else 'on_create' }}"
+    state: present
+
+- name: Authorise the admin SSH key
+  ansible.posix.authorized_key:
+    user: "{{ admin_user }}"
+    key: "{{ admin_ssh_key }}"
+    state: present
+  when: admin_ssh_key | default('') | length > 0
+
+# NOPASSWD is deliberate and worth a moment's thought. Cockpit will prompt for
+# the password for privileged actions when the account has one, which is the
+# better default for an interactive operator. This entry exists so automation
+# and break-glass console work do not stall on a prompt.
+- name: Grant sudo to the admin group
+  ansible.builtin.copy:
+    dest: "/etc/sudoers.d/10-{{ admin_user }}"
+    mode: "0440"
+    owner: root
+    group: root
+    content: |
+      %{{ admin_user }} ALL=(ALL) NOPASSWD:ALL
+    validate: 'visudo -cf %s'
+
+- name: Check whether Cockpit is present
+  ansible.builtin.command: rpm -q cockpit
+  register: _cockpit_rpm
+  changed_when: false
+  failed_when: false
+
+# On an image-mode host Cockpit has to come from the image. Saying so beats
+# failing on `systemctl enable cockpit.socket` for a unit that does not exist,
+# and beats installing it at runtime into a layer the next reboot discards.
+- name: Explain what is needed when Cockpit is missing from the image
+  ansible.builtin.debug:
+    msg: >-
+      Cockpit is not in this image. Rebuild it (bootc/build.sh) with the cockpit
+      layer, then `bootc upgrade` and reboot each node. Skipping the Cockpit
+      steps; the {{ admin_user }} account has still been configured.
+  when:
+    - is_bootc | bool
+    - _cockpit_rpm.rc != 0
+
+- name: Enable Cockpit
+  ansible.builtin.systemd:
+    name: cockpit.socket
+    enabled: true
+    state: started
+  when: _cockpit_rpm.rc == 0
+
+- name: Open Cockpit on the management network only
+  ansible.posix.firewalld:
+    service: cockpit
+    zone: "{{ item }}"
+    permanent: true
+    immediate: true
+    state: enabled
+  loop: "{{ cockpit_firewall_zones }}"
+  when: _cockpit_rpm.rc == 0
+
+- name: Report where Cockpit is reachable
+  ansible.builtin.debug:
+    msg: "Cockpit: https://{{ lan_ip | default(ansible_default_ipv4.address) }}:9090  (user: {{ admin_user }})"
+  when: _cockpit_rpm.rc == 0

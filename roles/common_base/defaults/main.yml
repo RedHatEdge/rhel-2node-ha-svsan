@@ -1,0 +1,27 @@
+---
+# ── Operator access ────────────────────────────────────────────────────────
+# A named account for the people who run the store, plus Cockpit on :9090.
+admin_user: admin
+
+# wheel gives sudo. libvirt and qemu let Cockpit's Machines page manage the
+# guests as this user; without them the page loads but can do nothing.
+admin_extra_groups:
+  - wheel
+  - libvirt
+  - qemu
+
+# Public key for the admin account. Leave empty to skip.
+admin_ssh_key: ""
+
+# Optional. A CRYPTED hash, not a plaintext password -- generate with
+#   mkpasswd --method=yescrypt
+# or
+#   python3 -c 'import crypt;print(crypt.crypt("PASSWORD", crypt.mksalt(crypt.METHOD_SHA512)))'
+# Omit to leave the account key-only, which is the better default: Cockpit can
+# still be reached with an SSH key via its login page.
+# admin_password_hash: "$6$..."
+
+# Cockpit is deliberately NOT opened on the storage/replication zone -- that
+# segment carries iSCSI and DRBD traffic and has no business serving a web UI.
+cockpit_firewall_zones:
+  - public
