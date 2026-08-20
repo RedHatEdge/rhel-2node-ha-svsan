@@ -74,12 +74,28 @@ RUN dnf -y install \
       cockpit cockpit-ws cockpit-system cockpit-bridge \
       cockpit-machines cockpit-podman cockpit-storaged \
       cockpit-networkmanager \
+      libvirt-dbus \
       podman \
  && dnf clean all \
- && systemctl enable cockpit.socket
+ && systemctl enable cockpit.socket libvirt-dbus.service \
+ && echo 'u libvirtdbus - "Libvirt DBus" / /sbin/nologin' \
+      > /usr/lib/sysusers.d/libvirt-dbus.conf
+
+# cockpit-machines does NOT talk to libvirtd or virtqemud directly -- it talks to
+# libvirt over D-Bus, via libvirt-dbus. Without that package its Machines page
+# reports "Virtualization service (libvirt) is not active" and lists nothing,
+# while virsh on the same host works perfectly. The daemon mode (monolithic vs
+# modular) is irrelevant to this; chasing it is a dead end.
+#
+# The sysusers.d line above matters just as much. libvirt-dbus runs as the
+# libvirtdbus user and the D-Bus policy grants ownership of org.libvirt to that
+# user alone. The RPM creates it with a scriptlet, and on an image-mode host that
+# user does not survive into the deployed system -- so the service starts, cannot
+# own the bus name, logs "Disconnected from D-Bus" and exits. Declaring it via
+# systemd-sysusers recreates it on every boot, which is the mechanism image mode
+# expects.
 
 # ---------------------------------------------------------------------------
----------------------------------------------------------------------------
 # 3. High availability
 #    corosync-qdevice is included so the node can join the remote qnetd arbiter.
 #    knet is the default and only supported transport on RHEL 9.

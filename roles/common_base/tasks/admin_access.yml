@@ -127,60 +127,66 @@
   when: root_password_hash is defined
   no_log: true
 
-# Cockpit's Machines page drives libvirt, and RHEL 9 can run libvirt two ways:
-# the monolithic libvirtd, or the modular per-driver daemons (virtqemud and
-# friends). Both work for virsh, which is why "virsh lists the guests" is NOT a
-# valid check that Cockpit will see them -- virsh talks to whichever is running.
+# cockpit-machines reaches libvirt over D-BUS, through libvirt-dbus -- not by
+# talking to libvirtd or virtqemud directly. If libvirt-dbus is not running its
+# Machines page reports "Virtualization service (libvirt) is not active" and
+# lists nothing, while virsh on the same host works perfectly. That makes "virsh
+# lists the guests" a useless check for this, and makes the monolithic-vs-modular
+# daemon question a red herring: neither mode fixes it.
 #
-# cockpit-machines 3xx drives the MODULAR daemons. On a host where libvirtd is
-# running instead, its Machines page reports "Virtualization service (libvirt) is
-# not active" and shows nothing, while virsh on the same box lists every guest.
-#
-# The two modes conflict, so enforce one. Modular is correct for current
-# cockpit-machines and is RHEL 9's default; a host that has been switched to
-# monolithic -- or an older image that shipped that way -- needs moving back.
-- name: Stop the monolithic libvirt daemon
-  ansible.builtin.systemd:
-    name: "{{ item }}"
-    enabled: false
-    state: stopped
-  loop:
-    - libvirtd.service
-    - libvirtd.socket
-    - libvirtd-ro.socket
+# The service runs as the libvirtdbus user, and the D-Bus policy grants ownership
+# of org.libvirt to that user alone. On an image-mode host the RPM's scriptlet
+# user does not survive into the deployed system, so the service starts, cannot
+# own the bus name, logs "Disconnected from D-Bus" and exits. Recreate it if it
+# is missing. D-Bus also caches the policy's user lookup from its own startup, so
+# it has to be reloaded before the name can be owned.
+- name: Check for the libvirt-dbus user
+  ansible.builtin.getent:
+    database: passwd
+    key: libvirtdbus
+  register: _lvdbus_user
   failed_when: false
-  when: libvirt_modular | default(true) | bool
 
-- name: Enable the modular libvirt daemons for Cockpit
+- name: Create the libvirt-dbus user when the image did not carry it
+  ansible.builtin.user:
+    name: libvirtdbus
+    system: true
+    shell: /sbin/nologin
+    home: /
+    create_home: false
+    comment: Libvirt DBus
+  when: _lvdbus_user is failed or (_lvdbus_user.ansible_facts.getent_passwd is not defined)
+  register: _lvdbus_created
+
+- name: Reload D-Bus so the policy picks up the user
   ansible.builtin.systemd:
-    name: "{{ item }}"
+    name: dbus
+    state: reloaded
+  when: _lvdbus_created.changed | default(false)
+  failed_when: false
+
+- name: Enable libvirt-dbus
+  ansible.builtin.systemd:
+    name: libvirt-dbus
     enabled: true
     state: started
-  loop:
-    - virtqemud.socket
-    - virtnetworkd.socket
-    - virtstoraged.socket
-    - virtnodedevd.socket
+  register: _lvdbus
   failed_when: false
-  when: libvirt_modular | default(true) | bool
 
-# Check the SOCKET, not the service. virtqemud is socket-activated: the service
-# sits inactive until something connects, so testing the service right after
-# enabling it reports "inactive" on a perfectly healthy host. The socket being
-# listening is what determines whether Cockpit can reach libvirt.
-- name: Confirm the socket Cockpit connects to is listening
-  ansible.builtin.command: systemctl is-active virtqemud.socket
-  register: _virtqemud
+- name: Confirm Cockpit can reach libvirt over D-Bus
+  ansible.builtin.command: busctl --system list
+  register: _busctl
   changed_when: false
   failed_when: false
 
 - name: Report whether Cockpit will see the guests
   ansible.builtin.debug:
     msg: >-
-      {{ 'virtqemud.socket listening — Cockpit Machines will list the guests.'
-         if _virtqemud.stdout | trim == 'active'
-         else 'virtqemud.socket is ' ~ (_virtqemud.stdout | trim) ~ ' — Cockpit Machines will report
-               "Virtualization service (libvirt) is not active" even though virsh works.' }}
+      {{ 'org.libvirt is on the bus — Cockpit Machines will list the guests.'
+         if ('org.libvirt' in (_busctl.stdout | default('')))
+         else 'org.libvirt is NOT on the bus — Cockpit Machines will report
+               "Virtualization service (libvirt) is not active" even though virsh works.
+               Check libvirt-dbus and the libvirtdbus user.' }}
 
 - name: Enable Cockpit
   ansible.builtin.systemd:
