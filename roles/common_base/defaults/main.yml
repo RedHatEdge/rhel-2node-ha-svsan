@@ -10,15 +10,19 @@ admin_extra_groups:
   - libvirt
   - qemu
 
-# Public key for the admin account. Leave empty to skip.
+# Public key for the admin account. If left empty the role copies root's
+# authorized_keys, so the account is at least reachable by whoever can already
+# reach the node.
 admin_ssh_key: ""
 
 # Optional. A CRYPTED hash, not a plaintext password -- generate with
 #   mkpasswd --method=yescrypt
 # or
 #   python3 -c 'import crypt;print(crypt.crypt("PASSWORD", crypt.mksalt(crypt.METHOD_SHA512)))'
-# Omit to leave the account key-only, which is the better default: Cockpit can
-# still be reached with an SSH key via its login page.
+# Cockpit authenticates through PAM, NOT through SSH keys, so a key-only account
+# cannot log into the web UI at all. If you want Cockpit, this has to be set.
+# The role asserts that at least one of password/key is present rather than
+# silently creating an account nobody can use.
 # admin_password_hash: "$6$..."
 
 # Cockpit is deliberately NOT opened on the storage/replication zone -- that

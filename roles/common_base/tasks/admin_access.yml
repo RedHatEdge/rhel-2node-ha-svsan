@@ -28,6 +28,11 @@
     name: "{{ admin_user }}"
     state: present
 
+- name: Locate the admin home
+  ansible.builtin.set_fact:
+    # Image-mode hosts put home directories under /var/home.
+    _admin_home: "{{ '/var/home/' ~ admin_user if (is_bootc | bool) else '/home/' ~ admin_user }}"
+
 - name: Create the admin user
   ansible.builtin.user:
     name: "{{ admin_user }}"
@@ -38,6 +43,7 @@
     append: true
     shell: /bin/bash
     create_home: true
+    home: "{{ _admin_home }}"
     password: "{{ admin_password_hash | default(omit) }}"
     update_password: "{{ 'always' if admin_password_hash is defined else 'on_create' }}"
     state: present
@@ -48,6 +54,33 @@
     key: "{{ admin_ssh_key }}"
     state: present
   when: admin_ssh_key | default('') | length > 0
+
+# Inherit root's keys when none was given. Otherwise this role creates an
+# account with a locked password and no key -- one that exists, reports
+# success, and cannot be logged into by anybody.
+- name: Fall back to root's authorised keys
+  ansible.builtin.copy:
+    src: /root/.ssh/authorized_keys
+    dest: "{{ _admin_home }}/.ssh/authorized_keys"
+    remote_src: true
+    owner: "{{ admin_user }}"
+    group: "{{ admin_user }}"
+    mode: "0600"
+  when: admin_ssh_key | default('') | length == 0
+  failed_when: false
+
+# An account with no password cannot use Cockpit at all: its login goes through
+# PAM, not SSH keys. So a usable operator account needs BOTH -- a key for
+# automation and a password for the browser.
+- name: Refuse to leave the account unusable
+  ansible.builtin.assert:
+    that:
+      - (admin_password_hash is defined) or (admin_ssh_key | default('') | length > 0)
+    fail_msg: >-
+      {{ admin_user }} would have neither a password nor an SSH key. Set
+      admin_password_hash (Cockpit needs it) and/or admin_ssh_key, or this
+      account cannot be logged into. Generate a hash with:
+      mkpasswd --method=yescrypt
 
 # NOPASSWD is deliberate and worth a moment's thought. Cockpit will prompt for
 # the password for privileged actions when the account has one, which is the
