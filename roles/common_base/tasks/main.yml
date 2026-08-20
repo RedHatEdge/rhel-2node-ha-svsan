@@ -36,7 +36,7 @@
     enabled: true
     state: started
 
-# Time skew breaks corosync membership and confuses DRBD/SvSAN logs.
+# Time skew breaks corosync membership and confuses the storage logs.
 - name: Verify clock is synchronised
   ansible.builtin.command: chronyc tracking
   register: _chrony

@@ -32,41 +32,6 @@
   changed_when: _lc.rc == 0
   failed_when: _lc.rc not in [0, 1]
 
-# Option B only: a guest must not start before its replicated filesystem is
-# mounted, and must follow that filesystem wherever it goes.
-- name: Colocate guests with their DRBD filesystem
-  ansible.builtin.command: >
-    pcs constraint colocation add vm-{{ vm.name }}
-    with fs-{{ 'store-a' if vm.home_node == node1_name else 'store-b' }} INFINITY
-  loop: "{{ guest_vms }}"
-  loop_control:
-    loop_var: vm
-    label: "vm-{{ vm.name }}"
-  when: storage_backend == 'drbd'
-  delegate_to: "{{ node1_name }}"
-  register: _cc
-  changed_when: _cc.rc == 0
-  failed_when: _cc.rc not in [0, 1]
-
-- name: Order filesystem before guest
-  ansible.builtin.command: >
-    pcs constraint order start fs-{{ 'store-a' if vm.home_node == node1_name else 'store-b' }}
-    then start vm-{{ vm.name }} kind=Mandatory
-  loop: "{{ guest_vms }}"
-  loop_control:
-    loop_var: vm
-    label: "vm-{{ vm.name }}"
-  when: storage_backend == 'drbd'
-  delegate_to: "{{ node1_name }}"
-  register: _oc
-  changed_when: _oc.rc == 0
-  # rc 1 is only acceptable when pcs says the constraint already exists. A bare
-  # INFINITY is rejected as "missing value of 'INFINITY' option", also rc 1 --
-  # tolerating that left the cluster with no ordering constraints at all.
-  failed_when:
-    - _oc.rc != 0
-    - "'already exists' not in (_oc.stderr | default('')) | lower"
-
 - name: Wait for the cluster to settle
   ansible.builtin.command: crm_resource --wait
   delegate_to: "{{ node1_name }}"

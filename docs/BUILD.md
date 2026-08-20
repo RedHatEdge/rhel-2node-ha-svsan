@@ -358,7 +358,7 @@ From the hosts, never from a workstation — the storage segment is not routed.
 
 ```
 node1, node2      RHEL 9.8, Pacemaker, 3-vote quorum, Redfish fencing
-                  vgstore: lv-store-a, lv-store-b (DRBD) | lv-svsan-pool (SvSAN)
+                  vgstore: lv-svsan-pool
 vsa1, vsa2        SvSAN appliances, MACs set from inventory
 targets           pos 20 GB, pgsql 40 GB, mirrored, Majority + witness
 qnetd1            corosync-qnetd :5403 and nsh-witness :4174, both quorum systems

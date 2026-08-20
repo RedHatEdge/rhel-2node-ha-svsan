@@ -2,7 +2,7 @@
 #
 # ONE image serves BOTH storage options and BOTH nodes.
 #
-#   * Both storage stacks are present (DRBD kmod + iSCSI/multipath). They are
+#   * The iSCSI initiator and multipath stack are present. They are
 #     small, and baking both means one image to build and keeps the
 #     "one substrate, two options" design intact — Ansible activates whichever
 #     `storage_backend` selects.
@@ -124,38 +124,6 @@ RUN dnf -y install \
  && dnf clean all
 
 # ---------------------------------------------------------------------------
-# 6. Option B — DRBD
-#
-#    THE bootc trade-off, stated plainly: DRBD is an out-of-tree kernel module,
-#    so it is baked into the image and must be rebuilt whenever the base image's
-#    kernel moves. kmod-drbd9x is kABI-tracking (weak-modules), which carries it
-#    across minor kernel updates, but a major bump needs a matching build.
-#
-#    ELRepo is fine for a lab. Production needs LINBIT-supported packages —
-#    LINBIT supports DRBD, Red Hat supports RHEL, and the two work joint
-#    escalations. Swap this block for the LINBIT repo when that is in place.
-# ---------------------------------------------------------------------------
-RUN rpm --import https://www.elrepo.org/RPM-GPG-KEY-elrepo.org \
- && dnf -y install https://www.elrepo.org/elrepo-release-9.el9.elrepo.noarch.rpm \
- && dnf -y install kmod-drbd9x drbd9x-utils \
- && dnf clean all
-
-RUN echo drbd > /etc/modules-load.d/drbd.conf
-
-#    ELRepo labels the OCF resource agent as drbd_exec_t — the label for the
-#    DRBD *daemon* — rather than bin_t, which is what every other OCF agent
-#    carries. pacemaker-execd therefore transitions the agent into the drbd_t
-#    domain, which cannot write cluster_var_log_t, and the agent dies in ~50 ms
-#    with "Permission denied" on /var/log/pacemaker/pacemaker.log.
-#
-#    The failure is invisible in pcs, which just reports a start error, and it
-#    only appears with SELinux enforcing — so it looks like a DRBD problem and
-#    is not one. Relabel the agent as the ordinary executable it is.
-RUN semanage fcontext -a -t bin_t '/usr/lib/ocf/resource\.d/linbit/drbd' 2>/dev/null || true; \
-    chcon -t bin_t /usr/lib/ocf/resource.d/linbit/drbd 2>/dev/null || \
-      echo 'note: chcon skipped (build fs rejects the xattr); semanage rule applies on relabel'
-
-# ---------------------------------------------------------------------------
 # 7. Services
 #    Enabled here so a freshly installed node is reachable and time-synced
 #    before Ansible ever connects. Cluster services are deliberately NOT
@@ -220,6 +188,6 @@ RUN subscription-manager unregister || true; \
     rm -rf /var/cache/* /var/lib/rhsm /etc/pki/entitlement/*
 
 LABEL org.opencontainers.image.title="store-node" \
-      org.opencontainers.image.description="RHEL bootc node for a 2-node store cluster: KVM, Pacemaker, DRBD and iSCSI"
+      org.opencontainers.image.description="RHEL bootc node for a 2-node store cluster: KVM, Pacemaker and iSCSI"
 
 RUN bootc container lint

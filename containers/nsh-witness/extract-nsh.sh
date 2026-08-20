@@ -1,16 +1,19 @@
 #!/bin/bash
-# Pull the amd64 NSH binaries out of StorMagic's own packaging into this build
-# context. Nothing vendor-owned is committed to this repo.
+# Stages the amd64 Neutral Storage Host binaries from a StorMagic package you
+# have already downloaded, so they can be built into a container image.
 #
 #   ./extract-nsh.sh ~/Downloads/svsan_6-7_plugin_ova.zip
 #
-# Why the vCenter plugin OVA, of all places: StorMagic publish the witness as an
-# armhf .deb (Raspberry Pi) and as a vSphere appliance. Neither is an amd64
-# package you can install on RHEL. But the plugin appliance is an Ubuntu VM that
-# ships the full amd64 SvSAN toolset under /opt/stormagic/SvSAN, including the
-# witness daemons and a self-contained loader and glibc.
+# Nothing belonging to StorMagic is committed to this repository — you supply the
+# package, and the binaries stay in your build context.
 #
-# If StorMagic supply a proper amd64 package, prefer it and drop this script.
+# Why this package: the appliance it contains carries the amd64 SvSAN toolset
+# under /opt/stormagic/SvSAN, including the witness daemons together with their
+# own loader and glibc, which is what makes them straightforward to containerise.
+#
+# StorMagic also document a witness RPM. If you have one, or your support contact
+# can provide a packaged amd64 witness, use that in preference to this script --
+# a vendor-supplied package is always the better starting point.
 set -euo pipefail
 
 ZIP="${1:-}"

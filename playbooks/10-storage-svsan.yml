@@ -4,16 +4,15 @@
 #   make svsan          (or)
 #   ansible-playbook playbooks/10-option-a-svsan.yml -e storage_backend=svsan
 #
-# This play stands Option A up on its own, from a provisioned node to running
-# VSAs. It does NOT depend on, and does not disturb, Option B: the VSA pool is a
-# separate logical volume in the same volume group, so DRBD keeps its volumes and
-# both options can be demonstrated on the same hardware in one session.
+# This play stands the storage layer up on its own, from a provisioned node to
+# running VSAs. The VSA pool is a dedicated logical volume rather than the whole
+# disk, so the volume group keeps room for anything else the host needs.
 #
 # Two arbitration services are involved and they are NOT the same thing:
 #   corosync-qnetd  — arbitrates CLUSTER MEMBERSHIP  (installed by 00-substrate)
 #   SvSAN NSH       — arbitrates MIRROR OWNERSHIP    (installed here)
 # Both live on the arbiter so they share a failure domain and partition
-# identically. See docs/09 §5.
+# identically. See "Two quorum systems" in the README.
 
 - name: Preflight
   hosts: cluster
@@ -31,10 +30,10 @@
           because the VSA attaches to it and the host must reach its OWN VSA over
           it — the host is the iSCSI initiator. macvtap cannot do that.
 
-          This briefly interrupts corosync ring1 and, if Option B is running,
-          DRBD replication. Ansible connects over the management ring, so this
-          play cannot cut its own connection. The cluster is placed in
-          maintenance mode below so Pacemaker does not react.
+          This briefly interrupts corosync ring1 and mirror replication.
+          Ansible connects over the management ring, so this play cannot cut its
+          own connection. The cluster is placed in maintenance mode below so
+          Pacemaker does not react.
 
 # Maintenance mode BEFORE touching the storage ring, so a brief ring1 outage
 # cannot trigger recovery or fencing on a running cluster.

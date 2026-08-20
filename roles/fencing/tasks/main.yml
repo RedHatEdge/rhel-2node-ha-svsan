@@ -1,5 +1,5 @@
 ---
-# Fencing is mandatory. With DRBD or a VSA holding the only copy of store data,
+# Fencing is mandatory. With a VSA holding the only copy of store data,
 # a split brain without fencing risks divergence.
 #
 # fence_redfish  — production design. Out-of-band via BMC (Lenovo XCC).

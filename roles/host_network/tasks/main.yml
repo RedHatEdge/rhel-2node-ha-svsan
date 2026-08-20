@@ -1,7 +1,7 @@
 ---
 # Two networks:
 #   br-lan  — ring0, management, and the bridge guests attach to
-#   repl    — ring1, plus replication traffic (DRBD sync, or SvSAN mirror+iSCSI)
+#   repl    — ring1, plus the SvSAN mirror and iSCSI traffic
 #
 # Connections are bound by MAC ADDRESS, not interface name. Names shift when
 # firmware or hardware changes; MACs do not. NetworkManager will claim the right
@@ -80,11 +80,11 @@
 # one it runs on — so the storage NIC has to be a real bridge, exactly as the
 # VSA and the VMkernel port share a vSwitch on ESXi.
 #
-# DRBD does not need this, so it is opt-in via repl_as_bridge.
+# It is opt-in via repl_as_bridge.
 #
 # Safe to run against a live cluster: Ansible connects over the MANAGEMENT ring
 # ({{ lan_bridge }}), so reconfiguring the storage NIC never cuts our own
-# connection. It does briefly interrupt corosync ring1 and DRBD replication —
+# connection. It does briefly interrupt corosync ring1 and mirror replication —
 # put the cluster in maintenance mode first (playbook does this).
 - name: Create the storage bridge
   register: _brrepl
@@ -187,7 +187,7 @@
 # br-slave-repl MUST be listed. It is created by the bridge tasks above, and the
 # cleanup below runs after them — omit it and the cleanup deletes the bridge's
 # only member port, leaving br-repl up with an address but no path off the host.
-# The storage ring then goes dark and DRBD drops to Connecting.
+# The storage ring then goes dark and the mirror loses its peer.
 - name: Enumerate the profiles this role owns
   ansible.builtin.set_fact:
     _keep_profiles: >-

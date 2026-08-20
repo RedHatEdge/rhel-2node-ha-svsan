@@ -82,18 +82,20 @@ podman build "${SECRET_ARGS[@]}" -t "${REF}" -f Containerfile .
 echo ">> image built:"
 podman images --format '  {{.Repository}}:{{.Tag}}  {{.Size}}' | grep "${IMAGE}" || true
 
-# Confirm the DRBD module actually made it in — the most likely thing to break
-# when the base image's kernel moves.
-echo ">> verifying DRBD kernel module against the image kernel"
+# Confirm the iSCSI initiator stack made it in — the appliance is useless to the
+# host without it.
+echo ">> verifying the initiator stack"
 podman run --rm "${REF}" bash -c '
   k=$(rpm -q kernel --qf "%{VERSION}-%{RELEASE}.%{ARCH}\n" | tail -1)
   echo "   kernel in image : $k"
-  if find /lib/modules -name "drbd.ko*" | grep -q .; then
-    echo "   drbd module     : $(find /lib/modules -name "drbd.ko*" | head -1)"
-  else
-    echo "   drbd module     : MISSING — kmod-drbd9x does not match this kernel"
-    exit 1
-  fi'
+  for b in iscsiadm multipath; do
+    if command -v $b >/dev/null; then
+      echo "   $b: $(command -v $b)"
+    else
+      echo "   $b: MISSING"
+      exit 1
+    fi
+  done'
 
 # --- push -------------------------------------------------------------------
 if [ "$PUSH" = 1 ]; then

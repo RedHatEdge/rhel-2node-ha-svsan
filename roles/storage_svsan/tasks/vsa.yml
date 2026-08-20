@@ -74,9 +74,8 @@
     state: started
 
 # ── storage for the VSA ────────────────────────────────────────────────────
-# A dedicated LV rather than the whole NVMe, so Option A can be demonstrated
-# WITHOUT destroying Option B. Both stacks coexist on the same disk: DRBD keeps
-# its two 429 GB volumes, SvSAN gets its own.
+# A dedicated LV rather than the whole NVMe. The pool can then be removed and
+# rebuilt without disturbing the physical volume or anything else on the disk.
 - name: Confirm the volume group exists
   ansible.builtin.command: "vgs --noheadings -o vg_name {{ svsan_pool_vg }}"
   register: _vg
@@ -88,8 +87,7 @@
     that: _vg.rc == 0
     fail_msg: >
       Volume group {{ svsan_pool_vg }} not found on {{ inventory_hostname }}.
-      Option A expects the storage disk to be an LVM PV — the same one Option B
-      carves its DRBD volumes from.
+      The storage disk is expected to be an LVM physical volume.
 
 - name: Create the SvSAN pool volume
   community.general.lvol:

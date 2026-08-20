@@ -1,21 +1,17 @@
 ---
 # Runs on the guest's home node only.
 #
-# Storage differs by backend:
-#   drbd  — qcow2 file on the DRBD-backed XFS mount for this node
-#   svsan — the raw mirrored LUN itself; no file, no host filesystem
+# The guest sits directly on the raw mirrored LUN — no file, and no host
+# filesystem between the guest and its storage.
 
 - name: Resolve this guest's disk path
   ansible.builtin.set_fact:
-    _disk: >-
-      {{ ('/var/store-a/' ~ vm.name ~ '.qcow2') if (storage_backend == 'drbd' and vm.home_node == node1_name)
-         else ('/var/store-b/' ~ vm.name ~ '.qcow2') if storage_backend == 'drbd'
-         else ('/dev/mapper/' ~ vm.name) }}
-    _disk_fmt: "{{ 'qcow2' if storage_backend == 'drbd' else 'raw' }}"
+    _disk: "/dev/mapper/{{ vm.name }}"
+    _disk_fmt: raw
 
 - name: Confirm the backing store is present
   ansible.builtin.stat:
-    path: "{{ _disk | dirname if storage_backend == 'drbd' else _disk }}"
+    path: "{{ _disk }}"
   register: _backing
 
 - name: Fail with a useful message if storage is not ready
@@ -23,9 +19,8 @@
     that: _backing.stat.exists
     fail_msg: >-
       {{ _disk }} backing store missing on {{ inventory_hostname }}.
-      {% if storage_backend == 'drbd' %}Is the DRBD filesystem mounted here?
-      Check: pcs status{% else %}Is the mirrored LUN presented and multipath
-      configured? Check: multipath -ll{% endif %}
+      Is the mirrored LUN presented and multipath configured?
+        Check: multipath -ll
 
 # ------------------------------------------------------------------ cloud-init
 # cloud-init's NoCloud datasource looks for files named EXACTLY user-data and
@@ -232,20 +227,6 @@
   changed_when: true
 
 # ----------------------------------------------------------------------- disk
-- name: Create the guest disk (DRBD — qcow2 on the replicated filesystem)
-  ansible.builtin.command: >
-    qemu-img convert -O qcow2
-    /var/lib/libvirt/images/ubuntu-base.img {{ _disk }}
-  args:
-    creates: "{{ _disk }}"
-  when: storage_backend == 'drbd'
-
-- name: Grow the guest disk
-  ansible.builtin.command: "qemu-img resize {{ _disk }} 40G"
-  when: storage_backend == 'drbd'
-  changed_when: true
-  failed_when: false
-
 # DESTRUCTIVE. This overwrites the guest's disk, and it used to run on every
 # pass — so applying an unrelated change (a firewall rule, a libvirt setting)
 # silently destroyed the running workload and its history. A demo where you

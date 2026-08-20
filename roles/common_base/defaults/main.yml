@@ -41,7 +41,7 @@ admin_password_hash: "{{ demo_password_hash }}"
 root_password_hash:  "{{ demo_password_hash }}"
 
 # Cockpit is deliberately NOT opened on the storage/replication zone -- that
-# segment carries iSCSI and DRBD traffic and has no business serving a web UI.
+# segment carries iSCSI and mirror traffic and has no business serving a web UI.
 cockpit_firewall_zones:
   - public
 

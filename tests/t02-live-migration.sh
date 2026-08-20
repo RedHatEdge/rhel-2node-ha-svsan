@@ -1,11 +1,11 @@
 #!/bin/bash
-# THE decisive test for Option B.
+# Live migration is the behaviour this platform exists to preserve: a guest moves
+# between hosts without restarting. It works here because both hosts have the
+# mirrored LUN open at the same time.
 #
-# They have vMotion today. Shared storage (Option A) gives live migration for
-# free. Single-primary DRBD (Option B) mounts the replicated filesystem on ONE
-# node at a time, so the target cannot see the guest's disk and libvirt refuses
-# the migration outright. Prove which case we are in, and do not report a
-# migration time for a migration that did not happen.
+# Prove which case we are in, and never report a migration time for a migration
+# that did not happen — a cold restart and a live migration look identical from
+# the cluster's point of view.
 set -u; source "$(dirname "$0")/lib.sh"
 
 VM=${VM:-vm-pos}
@@ -76,7 +76,7 @@ after_boot=""
 
 if [ "$refused" -gt 0 ] || [ "$migrate_failed" -gt 0 ]; then
   echo "  FINDING: libvirt refused live migration -- the target cannot see the disk."
-  echo "           Single-primary DRBD mounts the filesystem on one node only."
+  echo "           The target host cannot open the guest disk."
   record t02 live_migration_supported 0 bool
 else
   record t02 live_migration_supported 1 bool

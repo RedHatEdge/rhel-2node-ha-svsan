@@ -25,25 +25,17 @@ n1() { ssh $ssh_opts root@"$NODE1" "$@"; }
 n2() { ssh $ssh_opts root@"$NODE2" "$@"; }
 on() { ssh $ssh_opts root@"$1" "${@:2}"; }   # on <ip> <cmd...>
 
-# Which storage layer the WORKLOAD is actually on.
-#
-# Asking "is DRBD present" or "is iscsid running" answers a different question:
-# on a host where both layers have been staged, both are true at once and the
-# first check simply wins. That silently mislabels every row in the results file,
-# which is worse than failing. The guests' own disk backing is the ground truth,
-# so look there first and fall back to the presence checks only if no workload
-# guest is defined yet.
+# Confirm the workload really is on the appliance LUNs before recording anything
+# against them. A host can have other storage staged; the guests' own disk
+# backing is the ground truth, not what happens to be installed.
 detect_backend() {
   local src
   src=$(n1 "virsh dumpxml pos 2>/dev/null || virsh dumpxml pgsql 2>/dev/null" 2>/dev/null \
         | grep -oE "source (dev|file)='[^']+'" | grep -v 'seed.iso' | head -1)
   case "$src" in
-    *'/dev/mapper/'*)   echo svsan; return ;;
-    *'/var/store-'*)    echo drbd;  return ;;
+    *'/dev/mapper/'*) echo svsan; return ;;
   esac
-  # No workload guest defined yet -- fall back to what is installed.
   if n1 "virsh list --all --name 2>/dev/null | grep -q '^svsan-'" 2>/dev/null; then echo svsan
-  elif n1 "test -e /proc/drbd" 2>/dev/null; then echo drbd
   else echo unknown; fi
 }
 BACKEND=${BACKEND:-$(detect_backend)}

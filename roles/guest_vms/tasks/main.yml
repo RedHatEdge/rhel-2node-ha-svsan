@@ -6,7 +6,7 @@
 # health signal or placement control. The requirement is HA per VM.
 #
 # Each guest is provisioned ON ITS HOME NODE, because that is where its storage
-# is mounted (DRBD) or where its LUN is expected to be active (SvSAN).
+# its LUN is expected to be active.
 
 # Prefer a copy already on the control node. Each store node pulling 700 MB from
 # the internet is slow, and in a real store it may not have a route out at all.

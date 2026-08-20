@@ -74,12 +74,12 @@ svsan_vsa_journal_size: 20G
 svsan_vsa_name: "svsan-{{ inventory_hostname }}"
 
 # ── pool backing store ─────────────────────────────────────────────────────
-# A dedicated LV inside the SAME volume group Option B carves its DRBD volumes
-# from. This is deliberate: it lets Option A be built and demonstrated WITHOUT
-# destroying Option B, so both can be shown on the same hardware in one session.
+# A dedicated LV rather than the whole disk. That leaves the volume group free
+# for anything else the host needs, and makes the pool easy to remove and rebuild
+# without touching the physical volume.
 #
-# Point svsan_pool_device at the whole disk instead if you want the realistic
-# single-purpose layout — but that overwrites the DRBD volumes.
+# Point svsan_pool_device at the whole disk instead for a single-purpose layout,
+# which is what a production store would more likely use.
 svsan_pool_vg: vgstore
 svsan_pool_lv_name: lv-svsan-pool
 svsan_pool_lv_size: 90G

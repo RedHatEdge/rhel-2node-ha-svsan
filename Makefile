@@ -5,7 +5,6 @@
 #   make discover    gather hardware, write inventory/host_vars
 #   make substrate   cluster, quorum, fencing, KVM
 #   make admin       admin account + Cockpit only (safe on a live cluster)
-#   make drbd        stage Option B
 #   make svsan       stage Option A
 #   make status      pcs status from node1
 #
@@ -17,7 +16,7 @@ PLAYBOOK:= $(VENV)/bin/ansible-playbook
 GALAXY  := $(VENV)/bin/ansible-galaxy
 FENCE   ?= redfish
 
-.PHONY: venv lock ping discover substrate drbd svsan status test clean
+.PHONY: venv lock ping discover substrate svsan status test clean
 
 venv: $(VENV)/.stamp
 $(VENV)/.stamp: requirements.txt requirements.yml
@@ -122,12 +121,12 @@ vsa-destroy: venv
 	  virsh undefine svsan-$$(hostname -s) 2>/dev/null; \
 	  rm -f /var/lib/libvirt/images/svsan-$$(hostname -s)-*.qcow2; \
 	  lvremove -f vgstore/lv-svsan-pool 2>/dev/null; true'
-	@echo "Option A removed. Option B (DRBD) untouched."
+	@echo "Appliance layer removed."
 
 # ── Option A: witness container ────────────────────────────────────────────
 # The SvSAN witness as a container, deployable to any RHEL 9 host with podman.
-# StorMagic ship it only as an armhf .deb and a vSphere appliance; the amd64
-# binaries are lifted from their own vCenter plugin appliance.
+# Built from the amd64 binaries in a StorMagic package you supply; a
+# vendor-supplied amd64 witness package is preferable if you have one.
 #
 #   make nsh-image ZIP=~/Downloads/svsan_6-7_plugin_ova.zip
 nsh-image:

@@ -9,12 +9,12 @@
 # They are deliberately co-located so they share a failure domain and partition
 # identically. If they lived on different hosts, a partition could leave the
 # cluster believing node1 should run everything while the mirror believed node2's
-# plex was authoritative. See docs/09 §5.
+# plex was authoritative. See docs/BUILD.md.
 #
-# Shipped as a container so the witness can live on any RHEL 9 host with podman,
-# rather than requiring a dedicated appliance VM. StorMagic publish the witness
-# only as an armhf .deb and a vSphere appliance; the amd64 binaries are lifted
-# from their own vCenter plugin appliance by containers/nsh-witness/extract-nsh.sh.
+# Packaged as a container so the witness can live on any RHEL 9 host with podman
+# rather than needing a dedicated appliance VM. The binaries are staged from a
+# StorMagic package you supply — see containers/nsh-witness/extract-nsh.sh. If a
+# vendor-supplied amd64 witness package is available to you, prefer it.
 
 - name: Install podman
   ansible.builtin.dnf:

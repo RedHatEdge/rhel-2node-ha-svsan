@@ -3,7 +3,7 @@
 # needing a dedicated appliance VM per datacenter.
 #
 # WHY THIS EXISTS
-# StorMagic ships the witness as a Debian package (armhf from the trial portal)
+# The witness binaries come from a StorMagic package you supply
 # or as a vSphere appliance OVA. Neither suits a RHEL fleet. The amd64 binaries
 # do exist — inside the vCenter plugin appliance — and they are self-contained:
 # they carry their own loader and glibc under lib/, so they run unmodified on
@@ -18,7 +18,7 @@
 #
 # It is NOT the same thing as corosync-qnetd, which arbitrates CLUSTER
 # MEMBERSHIP. Both should run on the same arbiter host so the two quorum systems
-# share a failure domain and partition identically. See docs/09 §5.
+# share a failure domain and partition identically. See "Two quorum systems" in the README.
 #
 # Binaries are NOT vendored into this repo — they are StorMagic's, and licensed
 # accordingly. extract-nsh.sh pulls them from a package you have downloaded.

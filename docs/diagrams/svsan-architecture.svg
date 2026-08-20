@@ -64,30 +64,16 @@
 
     <!-- LVM -->
     <rect x="56" y="486" width="456" height="118" rx="3" fill="#ffffff" stroke="#d2d2d2" stroke-width="1.4"/>
-    <text x="72" y="508" font-family="Red Hat Display, sans-serif" font-size="12.5" font-weight="500" fill="#151515">LVM volume group · vgstore · 953.87 GB</text>
-    <rect x="72" y="520" width="132" height="40" rx="2" fill="#fafafa" stroke="#d2d2d2"/>
-    <text x="82" y="537" font-family="Red Hat Mono, monospace" font-size="10" fill="#4d4d4d">lv-store-a</text>
-    <text x="82" y="551" font-family="Red Hat Mono, monospace" font-size="9.5" fill="#6a6e73">429 G · DRBD</text>
-    <rect x="212" y="520" width="132" height="40" rx="2" fill="#fafafa" stroke="#d2d2d2"/>
-    <text x="222" y="537" font-family="Red Hat Mono, monospace" font-size="10" fill="#4d4d4d">lv-store-b</text>
-    <text x="222" y="551" font-family="Red Hat Mono, monospace" font-size="9.5" fill="#6a6e73">429 G · DRBD</text>
-    <rect x="352" y="520" width="144" height="40" rx="2" fill="#fdf7e7" stroke="#f0ab00" stroke-width="1.4"/>
-    <text x="362" y="537" font-family="Red Hat Mono, monospace" font-size="10" fill="#795600">lv-svsan-pool</text>
-    <text x="362" y="551" font-family="Red Hat Mono, monospace" font-size="9.5" fill="#795600">90 G · SvSAN</text>
-    <text x="72" y="584" font-family="Red Hat Mono, monospace" font-size="9.5" fill="#6a6e73">SvSAN (option A) and DRBD (option B) hold separate volumes — both stacks coexist</text>
+    <text x="72" y="508" font-family="Red Hat Display, sans-serif" font-size="12.5" font-weight="500" fill="#151515">LVM volume group · vgstore · 953.87 GB</text>    <rect x="72" y="520" width="168" height="40" rx="2" fill="#fdf7e7" stroke="#f0ab00" stroke-width="1.4"/>
+    <text x="82" y="537" font-family="Red Hat Mono, monospace" font-size="10" fill="#795600">lv-svsan-pool</text>
+    <text x="82" y="551" font-family="Red Hat Mono, monospace" font-size="9.5" fill="#795600">90 G · appliance pool</text>
+    <text x="72" y="584" font-family="Red Hat Mono, monospace" font-size="9.5" fill="#6a6e73">a dedicated volume, not the whole disk — the rest of the group stays free</text>
 
     <rect x="728" y="486" width="456" height="118" rx="3" fill="#ffffff" stroke="#d2d2d2" stroke-width="1.4"/>
-    <text x="744" y="508" font-family="Red Hat Display, sans-serif" font-size="12.5" font-weight="500" fill="#151515">LVM volume group · vgstore · 953.87 GB</text>
-    <rect x="744" y="520" width="132" height="40" rx="2" fill="#fafafa" stroke="#d2d2d2"/>
-    <text x="754" y="537" font-family="Red Hat Mono, monospace" font-size="10" fill="#4d4d4d">lv-store-a</text>
-    <text x="754" y="551" font-family="Red Hat Mono, monospace" font-size="9.5" fill="#6a6e73">429 G · DRBD</text>
-    <rect x="884" y="520" width="132" height="40" rx="2" fill="#fafafa" stroke="#d2d2d2"/>
-    <text x="894" y="537" font-family="Red Hat Mono, monospace" font-size="10" fill="#4d4d4d">lv-store-b</text>
-    <text x="894" y="551" font-family="Red Hat Mono, monospace" font-size="9.5" fill="#6a6e73">429 G · DRBD</text>
-    <rect x="1024" y="520" width="144" height="40" rx="2" fill="#fdf7e7" stroke="#f0ab00" stroke-width="1.4"/>
-    <text x="1034" y="537" font-family="Red Hat Mono, monospace" font-size="10" fill="#795600">lv-svsan-pool</text>
-    <text x="1034" y="551" font-family="Red Hat Mono, monospace" font-size="9.5" fill="#795600">90 G · SvSAN</text>
-    <text x="744" y="584" font-family="Red Hat Mono, monospace" font-size="9.5" fill="#6a6e73">SvSAN (option A) and DRBD (option B) hold separate volumes — both stacks coexist</text>
+    <text x="744" y="508" font-family="Red Hat Display, sans-serif" font-size="12.5" font-weight="500" fill="#151515">LVM volume group · vgstore · 953.87 GB</text>    <rect x="744" y="520" width="168" height="40" rx="2" fill="#fdf7e7" stroke="#f0ab00" stroke-width="1.4"/>
+    <text x="754" y="537" font-family="Red Hat Mono, monospace" font-size="10" fill="#795600">lv-svsan-pool</text>
+    <text x="754" y="551" font-family="Red Hat Mono, monospace" font-size="9.5" fill="#795600">90 G · appliance pool</text>
+    <text x="744" y="584" font-family="Red Hat Mono, monospace" font-size="9.5" fill="#6a6e73">a dedicated volume, not the whole disk — the rest of the group stays free</text>
 
     <!-- raw block passthrough -->
     <path d="M424,520 L424,378" stroke="#f0ab00" stroke-width="1.6" fill="none" marker-end="url(#ar)" stroke-dasharray="4 3"/>

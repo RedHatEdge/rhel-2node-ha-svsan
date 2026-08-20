@@ -42,18 +42,10 @@ wait_node_up "$NODE2" 900 || fail "node2 did not return"
 record t07 both_nodes_up $(( $(now_ms) - start )) ms
 
 # Storage layer must come up before Pacemaker will start guests.
-case "$BACKEND" in
-  drbd)
-    until n1 "drbdadm status store-a 2>/dev/null | grep -q 'disk:UpToDate'"; do
-      [ $(( $(now_ms) - start )) -gt 900000 ] && { fail "DRBD not UpToDate after 15m"; break; }
-      sleep 5
-    done ;;
-  svsan)
-    until n1 "test -b /dev/mapper/pos"; do
-      [ $(( $(now_ms) - start )) -gt 900000 ] && { fail "LUNs never appeared after 15m"; break; }
-      sleep 5
-    done ;;
-esac
+until n1 "test -b /dev/mapper/pos"; do
+  [ $(( $(now_ms) - start )) -gt 900000 ] && { fail "LUNs never appeared after 15m"; break; }
+  sleep 5
+done
 record t07 storage_ready $(( $(now_ms) - start )) ms
 
 if wait_started vm-pos 900 && wait_started vm-pgsql 900; then

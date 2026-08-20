@@ -2,14 +2,11 @@
 # The synchronous mirroring tax. Every write waits for the second copy, so this
 # lands directly in POS response time and Postgres commit latency.
 #
-# Measured INSIDE the guest, deliberately. The two backends present storage
-# differently -- DRBD gives the host a mounted filesystem, the appliance gives it
-# a raw iSCSI LUN that a guest already owns -- so there is no single host-side
-# path that means the same thing on both. Probing a host mount on the appliance
-# side silently measured the DRBD volume that happens to be staged on the same
-# machine and labelled the result "svsan". Writing to the raw LUN instead would
-# corrupt a running guest's disk. The guest's own view is the honest common
-# denominator, and it is what the workload actually experiences.
+# Measured INSIDE the guest, deliberately. The appliance presents a raw iSCSI LUN
+# that a running guest already owns, so there is no host-side filesystem to probe
+# — and writing to the raw LUN to benchmark it would corrupt that guest's disk.
+# The guest's own view is the honest measurement, and it is what the workload
+# actually experiences.
 set -u; source "$(dirname "$0")/lib.sh"
 
 DOM=${DOM:-pos}
