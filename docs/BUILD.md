@@ -424,8 +424,9 @@ multipath -ll        # /dev/mapper/pos and /dev/mapper/pgsql, 2 paths each
 make guests
 ```
 
-Ubuntu, deliberately — the stores run Ubuntu today and `virt-v2v` leaves the guest
-OS untouched, so the demo carries their workload rather than substituting ours.
+Ubuntu guests, to show that the platform is indifferent to what runs on it.
+`virt-v2v` leaves a guest's operating system untouched when importing, so an
+existing workload can move onto this platform as-is rather than being rebuilt.
 
 Rebuilding is opt-in (`-e guest_rebuild=true`) because the write is destructive;
 without that guard, applying an unrelated change silently destroys the running

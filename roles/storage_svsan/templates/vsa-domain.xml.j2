@@ -6,9 +6,9 @@
 
       MAC 52:54:00:53:01:01  ->  Hardware ID 525400530101
 
-  Verified on 6.7.GA.54690. That makes licensing reproducible: rebuild the VSA
-  with the same MAC and the same licence still applies. It also means an
-  unpinned MAC silently re-licenses the appliance on every rebuild.
+  Verified on 6.7.GA.54690. Rebuild the VSA with the same MAC and it comes back
+  as the same appliance; leave the MAC generated and each rebuild produces a new
+  identity, which is rarely what you want.
 
   PCI slots are pinned too, so Interface 0 stays management and Interface 1
   stays SAN regardless of how libvirt orders devices.
@@ -72,13 +72,12 @@
     </interface>
 
     {# Interface 1 — SAN / mirror.
-       Omitted until the appliance is licensed. A fresh appliance DHCPs on every
+       Omitted until the appliance has been through its setup wizard. A fresh appliance DHCPs on every
        interface and flags each as management. If anything serves DHCP on the
        storage segment the appliance acquires a second default route, and which
-       route wins is a coin toss — one VSA reaches the licence server and the
-       other times out. That is exactly what happened on 19 August: identical
-       hosts, identical play, one activated and one could not.
-       Attach the storage NIC after activation, when Interface 1 can be given a
+       route wins is a coin toss — so one VSA can reach an external service and
+         the other time out, from identical hosts and an identical play.
+       Attach the storage NIC afterwards, when Interface 1 can be given a
        static, non-management, gateway-less address. #}
 {% if svsan_attach_san_nic | default(true) %}
     <interface type='{{ 'bridge' if svsan_vsa_san_bridge is defined else 'network' }}'>

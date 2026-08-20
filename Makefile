@@ -91,16 +91,14 @@ vsa-image:
 	  rm -rf $$tmp && \
 	  echo "appliance image -> lab/svsan/images/svsan-vsa.qcow2"
 
-# Snapshot ACTIVATED appliances so a rebuild keeps its licence.
+# Snapshot the appliances once configured, so a rebuild can start from a known
+# good state instead of the wizard.
 #
 # TAKE THIS IMMEDIATELY AFTER THE WIZARD, BEFORE CREATING ANY POOL OR TARGET.
-# The useful restore point is activated-but-empty. A snapshot taken after a
+# The useful restore point is configured-but-empty. A snapshot taken after a
 # mirror exists carries that mirror's metadata, so restoring it reinstates a
-# target whose backing store is gone — and an orphaned mirrored target cannot be
-# deleted through the UI or the API. That mistake cost an afternoon on 19 August
-# and was only escapable by destroying both appliances. The licence is
-# bound to the serial, the serial is derived from the pinned MAC, so a snapshot
-# taken after activation restores licensed with no key spent.
+# target whose backing store is gone, and recovering from that is considerably
+# more work than rebuilding.
 #   make vsa-snapshot
 vsa-snapshot: venv
 	@mkdir -p lab/svsan/images

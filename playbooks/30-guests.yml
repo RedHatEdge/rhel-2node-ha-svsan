@@ -3,7 +3,7 @@
 #
 #   make guests
 #
-# Confirmed with the customer 19 Aug 2026: each host runs one Ubuntu VM, two per
+# One workload guest per host, two per site — a small, representative layout:
 # store, in a failover configuration — so a single host must be able to carry
 # both during a failure or a maintenance window. That is why each guest is
 # provisioned on its home node but every host can see both LUNs.

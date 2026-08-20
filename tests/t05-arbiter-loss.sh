@@ -1,5 +1,5 @@
 #!/bin/bash
-# Confirms the reassurance we are giving the customer:
+# Confirms the property this design depends on:
 # losing the arbiter must NOT stop the store. Both nodes up = 2 of 3 votes.
 set -u; source "$(dirname "$0")/lib.sh"
 

@@ -1,10 +1,10 @@
 ---
 # Operator access: a named admin account and Cockpit on :9090.
 #
-# Store staff and field engineers are not going to drive a two-node cluster from
-# pcs on a console. Cockpit gives them the guests (cockpit-machines), the
+# An edge site is not usually staffed by people who will drive a two-node cluster
+# from pcs on a console. Cockpit puts the guests (cockpit-machines), the
 # containers (cockpit-podman) and the disks (cockpit-storaged) in a browser,
-# which is what makes this handover-able.
+# which is what makes the platform handover-able to whoever looks after the site.
 
 - name: Install Cockpit and podman
   ansible.builtin.dnf:

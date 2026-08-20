@@ -57,12 +57,11 @@ svsan_image_dir: "{{ playbook_dir }}/../lab/svsan/images"
 # Pristine appliance image, converted from the Hyper-V package's VSA.vhd.
 svsan_vsa_image_pristine: "{{ svsan_image_dir }}/svsan-vsa.qcow2"
 
-# A per-node image, if one exists, wins over the pristine one. This is how an
-# ACTIVATED appliance survives a rebuild: the licence lives in the appliance's
-# own config partition and is bound to the serial, which is derived from the
-# pinned MAC. Snapshot an activated VSA to
-# lab/svsan/images/svsan-<node>-boot.qcow2 and every later rebuild comes back
-# licensed, with no re-activation and no key spent.
+# A per-node image, if one exists, wins over the pristine one. This is how a
+# configured appliance survives a rebuild: its configuration lives in the
+# appliance's own config partition. Snapshot a configured VSA to
+# lab/svsan/images/svsan-<node>-boot.qcow2 and every later rebuild starts from
+# that state rather than from the wizard.
 svsan_vsa_image_node: "{{ svsan_image_dir }}/svsan-{{ inventory_hostname }}-boot.qcow2"
 
 svsan_vsa_image: "/var/lib/libvirt/images/{{ svsan_vsa_name }}-boot.qcow2"

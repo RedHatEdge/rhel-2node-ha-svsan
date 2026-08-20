@@ -96,13 +96,12 @@
 <div class="wrap">
 
 <header>
-  <p class="eyebrow">Two-node store platform · Option A — StorMagic SvSAN</p>
+  <p class="eyebrow">Two-node edge platform · StorMagic SvSAN on RHEL KVM</p>
   <h1>SvSAN on RHEL KVM</h1>
   <p class="lede">Two RHEL 9 hosts, LVM-backed storage, a StorMagic virtual storage appliance on each, and a witness that is nothing more than a container on a third RHEL box.</p>
   <dl class="opts">
-    <dt>Option A</dt><dd>StorMagic SvSAN — the storage layer these stores already run under ESXi today, kept as-is and moved onto RHEL KVM. <strong>This diagram.</strong></dd>
-    
-  </dl>
+      <dt>What this is</dt><dd>A virtual storage appliance on each host presenting mirrored iSCSI that both hosts log into, so a guest can run on either and move between them without shared external storage.</dd>
+    </dl>
 </header>
 
 <figure>
@@ -246,11 +245,11 @@
   </div>
   <div class="note svsan">
     <p class="k">Identity is a MAC</p>
-    <p>The appliance derives its licence serial from the MAC of its first interface. Pin it in the domain XML and a rebuilt VSA re-activates against the same key with no clock reset; leave it generated and every rebuild re-licenses.</p>
+    <p>The appliance derives its identity from the MAC of its first interface. Pin the MAC in the domain XML and a rebuilt VSA comes back as the same appliance; leave it generated and every rebuild produces a new one.</p>
   </div>
   <div class="note mirror">
     <p class="k">Two rings, one job each</p>
-    <p>Management on enp2s0, mirror and iSCSI on enp3s0. Untick iSCSI on the management interface or replication drifts onto the store LAN — SvSAN will happily use any enabled path.</p>
+    <p>Management on enp2s0, mirror and iSCSI on enp3s0. Mirror placement is set per interface by the Mirror Traffic Policy — Preferred on the storage NIC, and Failover on management if you want it as a fallback path rather than a normal one.</p>
   </div>
   <div class="note mirror">
     <p class="k">Preferred, not exclusive</p>
@@ -301,7 +300,7 @@
 </figure>
 
 <h2>Addressing</h2>
-<p class="sub">As built · 19 August 2026</p>
+<p class="sub">As built and measured</p>
 
 <div class="tablewrap">
 <table>
@@ -326,7 +325,8 @@
 </ul>
 
 <footer>
-  Option A · SvSAN 6.7.GA.54690 on RHEL 9.8, evaluation licences, unmodified appliance. Not a StorMagic-supported configuration: KVM was withdrawn as a hypervisor in SvSAN 6.7.
-</footer>
+    Built and measured on SvSAN 6.7.GA.54690 with RHEL 9.8. The appliance is
+    unmodified. Check the configuration you intend to run with StorMagic.
+  </footer>
 
 </div>
