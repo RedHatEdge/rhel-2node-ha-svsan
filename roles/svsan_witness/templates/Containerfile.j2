@@ -1,0 +1,25 @@
+FROM {{ witness_base_image }}
+
+# StorMagic publishes the Linux witness as a .deb and lists Ubuntu 20.04 among
+# its supported witness platforms. Building on that base keeps the payload on a
+# platform they test, while the arbiter host itself stays RHEL.
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+COPY nsh.deb /tmp/nsh.deb
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      ca-certificates libc6 libstdc++6 \
+ && dpkg -i /tmp/nsh.deb || apt-get install -y -f \
+ && rm -f /tmp/nsh.deb \
+ && apt-get clean \
+ && rm -rf /var/lib/apt/lists/*
+
+EXPOSE {{ witness_port }}/tcp
+EXPOSE {{ witness_port }}/udp
+
+# The installed unit is a normal daemon; run it in the foreground.
+# Adjust the path once the .deb contents are known:
+#   dpkg -c nsh.deb   to list what it installs
+CMD ["/opt/stormagic/nsh/nsh", "--foreground"]

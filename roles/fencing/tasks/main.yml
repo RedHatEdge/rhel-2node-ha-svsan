@@ -1,0 +1,131 @@
+---
+# Fencing is mandatory. With DRBD or a VSA holding the only copy of store data,
+# a split brain without fencing risks divergence.
+#
+# fence_redfish  — production design. Out-of-band via BMC (Lenovo XCC).
+#                  The interconnect latency policy explicitly EXCLUDES STONITH
+#                  connections, so a BMC on a slow management path is fine.
+# fence_mikrotik — lab fallback using the existing RouterOS switch. Custom and
+#                  unsupported; never ship it.
+
+- name: Install fence agents
+  ansible.builtin.dnf:
+    name: fence-agents-all
+    state: present
+  when: not is_bootc | bool
+
+# ------------------------------------------------------------------ redfish
+- name: Create Redfish fence devices
+  ansible.builtin.command: >
+    pcs stonith create fence-{{ item }} fence_redfish
+    ip={{ hostvars[item].redfish_address }}
+    username={{ redfish_user }}
+    password={{ redfish_password }}
+    ssl_insecure=1
+    pcmk_host_list={{ item }}
+    op monitor interval=60s
+  loop: "{{ [node1_name, node2_name] }}"
+  when:
+    - fence_backend == 'redfish'
+    - hostvars[item].redfish_address | default('') | length > 0
+  run_once: true
+  delegate_to: "{{ node1_name }}"
+  register: _rf
+  changed_when: _rf.rc == 0
+  failed_when: _rf.rc not in [0, 1]
+  no_log: true
+
+# `pcs stonith create` fails if the device exists, so a re-run would silently
+# keep stale parameters. Update explicitly so corrected credentials take effect.
+- name: Update Redfish fence device parameters
+  ansible.builtin.command: >
+    pcs stonith update fence-{{ item }}
+    ip={{ hostvars[item].redfish_address }}
+    username={{ redfish_user }}
+    password={{ redfish_password }}
+    ssl_insecure=1
+    pcmk_host_list={{ item }}
+  loop: "{{ [node1_name, node2_name] }}"
+  when:
+    - fence_backend == 'redfish'
+    - hostvars[item].redfish_address | default('') | length > 0
+  run_once: true
+  delegate_to: "{{ node1_name }}"
+  register: _rfu
+  changed_when: _rfu.rc == 0
+  failed_when: _rfu.rc not in [0, 1]
+  no_log: true
+
+- name: Fail clearly if redfish selected but no BMC addresses set
+  ansible.builtin.assert:
+    that: hostvars[node1_name].redfish_address | default('') | length > 0
+    fail_msg: >
+      fence_backend=redfish but redfish_address is empty in host_vars.
+      Set the BMC addresses, or use -e fence_backend=mikrotik for the lab.
+  when: fence_backend == 'redfish'
+  run_once: true
+
+# ----------------------------------------------------------------- mikrotik
+- name: Install sshpass for the MikroTik agent
+  ansible.builtin.dnf:
+    name: sshpass
+    state: present
+  when:
+    - fence_backend == 'mikrotik'
+    - not is_bootc | bool
+
+- name: Install the custom MikroTik fence agent
+  ansible.builtin.copy:
+    src: fence_mikrotik_port
+    dest: /usr/local/bin/fence_mikrotik_port
+    mode: "0755"
+  when: fence_backend == 'mikrotik'
+
+- name: Create MikroTik fence devices
+  ansible.builtin.command: >
+    pcs stonith create fence-{{ item }} fence_mikrotik_port
+    pcmd_path=/usr/local/bin/fence_mikrotik_port
+    ip={{ mikrotik_ip }}
+    username={{ mikrotik_user }}
+    password={{ mikrotik_password }}
+    port={{ hostvars[item].switch_port }}
+    pcmk_host_list={{ item }}
+    op monitor interval=60s
+  loop: "{{ [node1_name, node2_name] }}"
+  when: fence_backend == 'mikrotik'
+  run_once: true
+  delegate_to: "{{ node1_name }}"
+  register: _mt
+  changed_when: _mt.rc == 0
+  failed_when: _mt.rc not in [0, 1]
+  no_log: true
+
+# ---------------------------------------------------------------- constraints
+- name: Prevent a node from hosting its own fence device
+  ansible.builtin.command: "pcs constraint location fence-{{ item }} avoids {{ item }}"
+  loop: "{{ [node1_name, node2_name] }}"
+  run_once: true
+  delegate_to: "{{ node1_name }}"
+  register: _fc
+  changed_when: _fc.rc == 0
+  failed_when: _fc.rc not in [0, 1]
+
+- name: Show stonith status
+  ansible.builtin.command: pcs stonith status
+  register: _stonith
+  changed_when: false
+  run_once: true
+  delegate_to: "{{ node1_name }}"
+
+- name: Report fencing configuration
+  ansible.builtin.debug:
+    var: _stonith.stdout_lines
+  run_once: true
+
+- name: Remind that fencing is untested until exercised
+  ansible.builtin.debug:
+    msg: >
+      Fencing is CONFIGURED, not PROVEN. Run tests/t06-split-brain.sh and
+      tests/t03-hard-node-kill.sh before trusting it. Untested fencing is the
+      most common way 2-node clusters fail in production.
+  run_once: true

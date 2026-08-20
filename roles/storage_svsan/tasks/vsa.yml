@@ -1,0 +1,271 @@
+---
+# Deploy the VSA. Everything here is idempotent and turnkey — no manual virsh.
+#
+# The VSA is a VM that owns local disk and serves iSCSI to BOTH hosts. It runs
+# from host-local storage, never from the mirrored volume it provides, and it is
+# pinned to its host: it does not fail over. If the node dies its VSA dies with
+# it and the mirror degrades to the survivor.
+#
+# It is deliberately NOT a Pacemaker resource — Pacemaker managing the provider
+# of its own storage is circular and creates shutdown-ordering hazards.
+
+- name: Look for a per-node (activated) appliance image
+  ansible.builtin.stat:
+    path: "{{ svsan_vsa_image_node }}"
+  register: _src_node
+  delegate_to: localhost
+  become: false
+
+- name: Look for the pristine appliance image
+  ansible.builtin.stat:
+    path: "{{ svsan_vsa_image_pristine }}"
+  register: _src_pristine
+  delegate_to: localhost
+  become: false
+
+# Prefer an activated per-node snapshot; fall back to the pristine image.
+- name: Choose the appliance image
+  ansible.builtin.set_fact:
+    svsan_vsa_image_src: "{{ svsan_vsa_image_node if _src_node.stat.exists else svsan_vsa_image_pristine }}"
+    svsan_image_is_activated: "{{ _src_node.stat.exists }}"
+
+- name: Report which image is being deployed
+  ansible.builtin.debug:
+    msg: >-
+      {{ inventory_hostname }}:
+      {{ 'ACTIVATED per-node image — licence preserved, no key required'
+         if svsan_image_is_activated
+         else 'pristine image — the setup wizard will require a licence key' }}
+
+- name: Require an appliance image
+  ansible.builtin.set_fact:
+    _src: "{{ {'stat': {'exists': (_src_node.stat.exists or _src_pristine.stat.exists)}} }}"
+
+- name: Explain how to produce the appliance image
+  ansible.builtin.fail:
+    msg: |
+      Appliance image not found at {{ svsan_vsa_image_src }}.
+
+      Produce it from the Hyper-V package — NOT the vSphere OVA. The two disks
+      are byte-identical, but the OVA declares transport com.vmware.guestInfo
+      and ships no CD-ROM, so it expects configuration over the VMware Tools
+      channel, which KVM does not have. The VHD carries no such envelope.
+
+        unzip svsan_6-7_windows_installer_plus_powershell.zip
+        7z x StorMagicSvSAN.msi                 # -> VSA.zip
+        unzip VSA.zip                            # -> VSA/Virtual Hard Disks/VSA.vhd
+        qemu-img convert -O qcow2 \
+          "VSA/Virtual Hard Disks/VSA.vhd" {{ svsan_vsa_image_src }}
+  when: not _src.stat.exists
+
+- name: Install virtualisation tooling
+  ansible.builtin.dnf:
+    name:
+      - libvirt-daemon-kvm
+      - qemu-kvm
+      - lvm2
+    state: present
+  when: not is_bootc | bool
+
+- name: Enable libvirt
+  ansible.builtin.systemd:
+    name: libvirtd
+    enabled: true
+    state: started
+
+# ── storage for the VSA ────────────────────────────────────────────────────
+# A dedicated LV rather than the whole NVMe, so Option A can be demonstrated
+# WITHOUT destroying Option B. Both stacks coexist on the same disk: DRBD keeps
+# its two 429 GB volumes, SvSAN gets its own.
+- name: Confirm the volume group exists
+  ansible.builtin.command: "vgs --noheadings -o vg_name {{ svsan_pool_vg }}"
+  register: _vg
+  changed_when: false
+  failed_when: false
+
+- name: Fail clearly if the volume group is missing
+  ansible.builtin.assert:
+    that: _vg.rc == 0
+    fail_msg: >
+      Volume group {{ svsan_pool_vg }} not found on {{ inventory_hostname }}.
+      Option A expects the storage disk to be an LVM PV — the same one Option B
+      carves its DRBD volumes from.
+
+- name: Create the SvSAN pool volume
+  community.general.lvol:
+    vg: "{{ svsan_pool_vg }}"
+    lv: "{{ svsan_pool_lv_name }}"
+    size: "{{ svsan_pool_lv_size }}"
+    state: present
+    shrink: false
+  register: _lv
+
+# A volume that still carries a previous pool's md superblock will be re-imported
+# by a freshly deployed appliance, along with any target metadata — which
+# resurrects exactly the orphaned-target state a rebuild was meant to clear.
+# Superblocks live at both ends of the device, so both ends must go.
+- name: Wipe any previous pool signature from the volume
+  ansible.builtin.shell: |
+    set -o pipefail
+    wipefs -a {{ svsan_pool_device }}
+    dd if=/dev/zero of={{ svsan_pool_device }} bs=1M count=64 oflag=direct
+    sz=$(blockdev --getsz {{ svsan_pool_device }})
+    dd if=/dev/zero of={{ svsan_pool_device }} bs=512 seek=$((sz-131072)) count=131072 oflag=direct
+  args:
+    executable: /bin/bash
+  when: _lv.changed or (svsan_pool_wipe | default(false) | bool)
+  changed_when: true
+
+# SvSAN's Software RAID subsystem writes an md superblock to its pool device.
+# RHEL's mdadm scan finds it and assembles it on the HOST as /dev/md127 — the
+# host claiming storage the VSA owns. On ESXi this cannot happen, so it is a
+# RHEL-specific hazard and it is silent until something breaks.
+- name: Stop the host claiming the VSA pool device as an md array
+  ansible.builtin.copy:
+    dest: /etc/mdadm.conf.d/99-svsan-exclude.conf
+    content: |
+      # The SvSAN pool volume carries an md superblock that belongs to the VSA,
+      # not to this host. Never assemble it here.
+      AUTO -all
+    mode: "0644"
+  failed_when: false
+
+- name: Ensure no host-side md array holds the pool volume
+  ansible.builtin.shell: |
+    set -o pipefail
+    for md in $(awk '/^md/{print $1}' /proc/mdstat 2>/dev/null); do
+      if mdadm --detail /dev/$md 2>/dev/null | grep -q "{{ svsan_pool_lv_name }}"; then
+        mdadm --stop /dev/$md
+        echo "stopped /dev/$md"
+      fi
+    done
+  args:
+    executable: /bin/bash
+  register: _mdstop
+  changed_when: "'stopped' in _mdstop.stdout"
+  failed_when: false
+
+- name: Create the appliance image directory
+  ansible.builtin.file:
+    path: "{{ svsan_vsa_image | dirname }}"
+    state: directory
+    mode: "0711"
+
+# The appliance carries its licence activation in its own config partition, so
+# copying an ACTIVATED image preserves the licence — provided the MAC, and
+# therefore the serial, is unchanged. That is why the MACs are pinned.
+- name: Place the appliance boot image
+  ansible.builtin.copy:
+    src: "{{ svsan_vsa_image_src }}"
+    dest: "{{ svsan_vsa_image }}"
+    mode: "0600"
+    force: false
+
+- name: Create the journal disk
+  ansible.builtin.command: >
+    qemu-img create -f qcow2 {{ svsan_vsa_journal }} {{ svsan_vsa_journal_size }}
+  args:
+    creates: "{{ svsan_vsa_journal }}"
+
+# ── domain ─────────────────────────────────────────────────────────────────
+- name: Check whether the VSA is already defined
+  ansible.builtin.command: "virsh dominfo {{ svsan_vsa_name }}"
+  register: _dom
+  changed_when: false
+  failed_when: false
+
+# A redefine must carry the EXISTING uuid. Without it libvirt treats the XML as
+# a new domain and refuses on the name collision, so the play could never update
+# a VSA once created — it would only ever work on a virgin host.
+- name: Capture the existing domain UUID
+  ansible.builtin.command: "virsh domuuid {{ svsan_vsa_name }}"
+  register: _domuuid
+  changed_when: false
+  failed_when: false
+  when: _dom.rc == 0
+
+- name: Carry the UUID into the definition
+  ansible.builtin.set_fact:
+    svsan_vsa_uuid: "{{ _domuuid.stdout | default('') | trim }}"
+
+- name: Render the VSA domain definition
+  ansible.builtin.template:
+    src: vsa-domain.xml.j2
+    dest: "/etc/libvirt/qemu/{{ svsan_vsa_name }}.xml.staged"
+    mode: "0600"
+  register: _domxml
+
+# Defined from a pinned template rather than virt-install, because the
+# management MAC determines the appliance's Hardware ID and therefore which
+# licence applies. virt-install generates a random MAC on every run and would
+# silently re-license the VSA each time it was rebuilt.
+- name: Define the VSA domain
+  ansible.builtin.command: "virsh define /etc/libvirt/qemu/{{ svsan_vsa_name }}.xml.staged"
+  when: _dom.rc != 0 or _domxml.changed
+  changed_when: true
+
+- name: Enable VSA autostart
+  ansible.builtin.command: "virsh autostart {{ svsan_vsa_name }}"
+  register: _auto
+  changed_when: "'marked as autostarted' in _auto.stdout"
+  failed_when: false
+
+- name: Start the VSA
+  ansible.builtin.command: "virsh start {{ svsan_vsa_name }}"
+  register: _start
+  changed_when: "'started' in _start.stdout"
+  failed_when: _start.rc != 0 and 'already active' not in _start.stderr
+
+- name: Confirm the appliance serial matches the pinned MAC
+  ansible.builtin.debug:
+    msg: >
+      {{ svsan_vsa_name }} management MAC {{ svsan_vsa_mgmt_mac }} must yield
+      Hardware ID {{ svsan_vsa_mgmt_mac | replace(':','') | upper }}. Verify on
+      the console before applying a licence key — a mismatch means the licence
+      binds to the wrong identity and will not survive a rebuild.
+
+- name: Wait for the VSA management interface
+  ansible.builtin.wait_for:
+    host: "{{ svsan_vsa_ip[inventory_hostname] }}"
+    port: 443
+    timeout: 300
+  failed_when: false
+  register: _vsaup
+
+- name: Report what remains manual
+  ansible.builtin.debug:
+    msg: |
+      VSA {{ svsan_vsa_name }} is running.
+
+      Management (intended): https://{{ svsan_vsa_ip[inventory_hostname] }}/
+      Storage / mirror path:  {{ svsan_vsa_san_ip[inventory_hostname] }}
+      Credentials: admin / password on a fresh appliance.
+
+      The appliance addresses its OWN interfaces, so if the management address
+      does not answer it has taken a DHCP lease instead. Read it from the
+      console — virsh console {{ svsan_vsa_name }} — and set it statically to
+      match the intended address above.
+
+      {% if _vsaup.failed | default(false) %}
+      NOT yet answering on 443 — it may still be booting, or its management
+      address may differ. Check: virsh console {{ svsan_vsa_name }}
+      {% endif %}
+
+      The following are NOT yet automated. SvSAN's XML-RPC endpoint at /RPC2/
+      authenticates but rejects the documented method names outside a session,
+      and the web UI drives a separate JSON API at /<entity>/json/<action>/.
+      Until that is worked out these are wizard steps:
+
+        1. Setup wizard: EULA, licence key, hostname, password
+        2. Interface 1 -> {{ svsan_vsa_san_ip[inventory_hostname] }}/24,
+           iSCSI traffic type ONLY, no gateway
+        3. Pool '{{ svsan_pool_name }}' on the KVM:virtio device, JBOD
+        4. Discovery is AUTOMATIC — nothing to do
+        5. Mirrored target, isolation policy:
+      {% if svsan_witness_available | default(false) %}
+           Majority, witness {{ svsan_witness_host }}
+      {% else %}
+           Up  — Majority is unavailable without an NSH witness, and Up has NO
+           split-brain protection. Acceptable for a demo, never for a store.
+      {% endif %}
+  tags: [always]

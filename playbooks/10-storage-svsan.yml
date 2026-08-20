@@ -1,0 +1,102 @@
+---
+# Option A — StorMagic SvSAN. Complete, standalone build.
+#
+#   make svsan          (or)
+#   ansible-playbook playbooks/10-option-a-svsan.yml -e storage_backend=svsan
+#
+# This play stands Option A up on its own, from a provisioned node to running
+# VSAs. It does NOT depend on, and does not disturb, Option B: the VSA pool is a
+# separate logical volume in the same volume group, so DRBD keeps its volumes and
+# both options can be demonstrated on the same hardware in one session.
+#
+# Two arbitration services are involved and they are NOT the same thing:
+#   corosync-qnetd  — arbitrates CLUSTER MEMBERSHIP  (installed by 00-substrate)
+#   SvSAN NSH       — arbitrates MIRROR OWNERSHIP    (installed here)
+# Both live on the arbiter so they share a failure domain and partition
+# identically. See docs/09 §5.
+
+- name: Preflight
+  hosts: cluster
+  gather_facts: false
+  vars:
+    storage_backend: svsan
+  tasks:
+    - name: Confirm the nodes are reachable
+      ansible.builtin.ping:
+
+    - name: Warn that the storage NIC will be rebridged
+      ansible.builtin.debug:
+        msg: |
+          Option A converts the storage interface to a bridge ({{ repl_bridge }}),
+          because the VSA attaches to it and the host must reach its OWN VSA over
+          it — the host is the iSCSI initiator. macvtap cannot do that.
+
+          This briefly interrupts corosync ring1 and, if Option B is running,
+          DRBD replication. Ansible connects over the management ring, so this
+          play cannot cut its own connection. The cluster is placed in
+          maintenance mode below so Pacemaker does not react.
+
+# Maintenance mode BEFORE touching the storage ring, so a brief ring1 outage
+# cannot trigger recovery or fencing on a running cluster.
+#
+# The hold and the release are in ONE play with block/always, deliberately. As
+# two separate plays, a failure in between aborts the run and leaves the cluster
+# in maintenance mode — resource management disabled, nothing recovering, and no
+# obvious sign unless someone reads `pcs status`. That happened once; it must not
+# be possible to happen again.
+
+- name: Arbiter — SvSAN witness (mirror quorum)
+  hosts: arbiter
+  become: true
+  vars:
+    storage_backend: svsan
+  roles:
+    - svsan_witness
+
+- name: Cluster nodes — storage network, VSA, host iSCSI plumbing
+  hosts: cluster
+  become: true
+  vars:
+    storage_backend: svsan
+  tasks:
+    # run_once binds to the first host in the CURRENT batch, so under --limit the
+    # release can land on a host that was excluded and never run. Checking on
+    # every host and releasing from every host is idempotent and cannot strand
+    # the cluster with resource management disabled.
+    - name: Check whether a cluster is running
+      ansible.builtin.command: pcs status
+      register: _pcs
+      changed_when: false
+      failed_when: false
+
+    - name: Hold and build
+      block:
+        - name: Enter maintenance mode
+          ansible.builtin.command: pcs property set maintenance-mode=true
+          when: _pcs.rc == 0
+          changed_when: true
+
+        - name: Storage network, VSA and host plumbing
+          ansible.builtin.include_role:
+            name: "{{ item }}"
+          loop:
+            - host_network
+            - storage_svsan
+
+      always:
+        - name: Leave maintenance mode
+          ansible.builtin.command: pcs property set maintenance-mode=false
+          when: _pcs.rc == 0
+          changed_when: true
+
+        - name: Confirm resource management is back on
+          ansible.builtin.command: pcs property config maintenance-mode
+          register: _mm
+          changed_when: false
+          failed_when: false
+
+        - name: Report maintenance state
+          ansible.builtin.debug:
+            msg: >-
+              {{ 'Resource management RESTORED' if 'maintenance-mode=false' in (_mm.stdout | default(''))
+                 else 'WARNING: cluster may still be in maintenance mode — check pcs status' }}

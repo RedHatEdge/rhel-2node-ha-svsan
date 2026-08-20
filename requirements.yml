@@ -1,0 +1,10 @@
+---
+# Ansible collections. Installed into ./collections/ by `make venv` so the
+# project does not depend on whatever is in the user's ~/.ansible.
+collections:
+  - name: community.general
+    version: ">=10.0.0"
+  - name: ansible.posix
+    version: ">=1.6.0"
+  - name: containers.podman
+    version: ">=1.15.0"

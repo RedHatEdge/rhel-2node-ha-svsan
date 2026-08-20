@@ -1,0 +1,30 @@
+---
+- name: Generate a root SSH key if missing
+  ansible.builtin.user:
+    name: root
+    generate_ssh_key: true
+    ssh_key_type: ed25519
+    ssh_key_file: .ssh/id_ed25519
+  register: _key
+
+- name: Collect the public key
+  ansible.builtin.slurp:
+    src: /root/.ssh/id_ed25519.pub
+  register: _pub
+
+- name: Authorise the peer's key
+  ansible.posix.authorized_key:
+    user: root
+    key: "{{ hostvars[item]._pub.content | b64decode }}"
+    state: present
+  loop: "{{ groups['cluster'] }}"
+  when: hostvars[item]._pub is defined
+
+- name: Pre-seed known_hosts for both nodes
+  ansible.builtin.known_hosts:
+    name: "{{ hostvars[item].node_name }}"
+    key: "{{ lookup('pipe', 'ssh-keyscan -t ed25519 ' + hostvars[item].lan_ip) }}"
+    path: /root/.ssh/known_hosts
+    state: present
+  loop: "{{ groups['cluster'] }}"
+  failed_when: false

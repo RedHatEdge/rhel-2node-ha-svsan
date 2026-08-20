@@ -1,0 +1,220 @@
+#!/bin/bash
+#
+# Fence agent for MikroTik RouterOS via SSH
+# Disables/enables switch ports to fence cluster nodes
+#
+
+VERSION="1.0"
+ACTION=""
+IP=""
+USERNAME=""
+PASSWORD=""
+PORT=""
+VERBOSE=0
+
+# Logging function
+log_msg() {
+    if [ "$VERBOSE" -eq 1 ]; then
+        logger -t fence_mikrotik_port "$1"
+        echo "$1" >&2
+    fi
+}
+
+# Usage function
+usage() {
+    cat << EOF
+Usage: $0 [options]
+
+Options:
+  -o action     Action: off, on, status, list, metadata
+  -a ip         IP address of MikroTik device
+  -l username   Username for MikroTik device
+  -p password   Password for MikroTik device
+  -n port       Port name/number to control
+  -v            Verbose mode
+  -V            Show version
+  -h            Show this help
+
+Actions:
+  off     - Disable the port (fence the node)
+  on      - Enable the port (unfence the node)
+  status  - Check if port is enabled
+  list    - List available ports
+  metadata - Show metadata
+EOF
+}
+
+# Metadata function for pacemaker
+metadata() {
+    cat << EOF
+<?xml version="1.0" ?>
+<resource-agent name="fence_mikrotik_port">
+<shortdesc lang="en">MikroTik port fence agent</shortdesc>
+<longdesc lang="en">
+Fence agent for MikroTik RouterOS devices that controls ethernet ports
+via SSH to fence cluster nodes by disabling their network connectivity.
+</longdesc>
+<parameters>
+<parameter name="ip" unique="0" required="1">
+<getopt mixed="-a" />
+<content type="string" />
+<shortdesc lang="en">IP address</shortdesc>
+</parameter>
+<parameter name="username" unique="0" required="1">
+<getopt mixed="-l" />
+<content type="string" default="admin" />
+<shortdesc lang="en">Login name</shortdesc>
+</parameter>
+<parameter name="password" unique="0" required="1">
+<getopt mixed="-p" />
+<content type="string" />
+<shortdesc lang="en">Login password</shortdesc>
+</parameter>
+<parameter name="port" unique="0" required="1">
+<getopt mixed="-n" />
+<content type="string" />
+<shortdesc lang="en">Physical port name</shortdesc>
+</parameter>
+</parameters>
+<actions>
+<action name="off" />
+<action name="on" />
+<action name="status" />
+<action name="list" />
+<action name="metadata" />
+</actions>
+</resource-agent>
+EOF
+}
+
+# SSH command function
+run_ssh_cmd() {
+    local cmd="$1"
+    log_msg "Executing SSH command: $cmd"
+    
+    # Use sshpass to handle password authentication
+    sshpass -p "$PASSWORD" ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 \
+        "$USERNAME@$IP" "$cmd" 2>/dev/null
+    return $?
+}
+
+# Check if port exists and get its status
+get_port_status() {
+    local result=$(run_ssh_cmd "/interface ethernet print where name=$PORT")
+    if [ $? -ne 0 ]; then
+        log_msg "ERROR: Failed to connect to MikroTik or port $PORT not found"
+        return 2
+    fi
+    
+    # Check if port is disabled
+    if echo "$result" | grep -q "X.*$PORT"; then
+        log_msg "Port $PORT is disabled"
+        return 1  # Port is disabled (fenced)
+    else
+        log_msg "Port $PORT is enabled"
+        return 0  # Port is enabled (unfenced)
+    fi
+}
+
+# Disable port (fence)
+fence_off() {
+    log_msg "Fencing: Disabling port $PORT on $IP"
+    run_ssh_cmd "/interface ethernet disable $PORT"
+    if [ $? -eq 0 ]; then
+        log_msg "Successfully disabled port $PORT"
+        return 0
+    else
+        log_msg "ERROR: Failed to disable port $PORT"
+        return 1
+    fi
+}
+
+# Enable port (unfence)
+fence_on() {
+    log_msg "Unfencing: Enabling port $PORT on $IP"
+    run_ssh_cmd "/interface ethernet enable $PORT"
+    if [ $? -eq 0 ]; then
+        log_msg "Successfully enabled port $PORT"
+        return 0
+    else
+        log_msg "ERROR: Failed to enable port $PORT"
+        return 1
+    fi
+}
+
+# List ports
+list_ports() {
+    log_msg "Listing ethernet ports on $IP"
+    run_ssh_cmd "/interface ethernet print brief"
+}
+
+# Check if sshpass is available
+check_dependencies() {
+    if ! command -v sshpass >/dev/null 2>&1; then
+        log_msg "ERROR: sshpass is required but not installed"
+        exit 1
+    fi
+}
+
+# Parse command line arguments
+while getopts "o:a:l:p:n:vVh" opt; do
+    case $opt in
+        o) ACTION="$OPTARG" ;;
+        a) IP="$OPTARG" ;;
+        l) USERNAME="$OPTARG" ;;
+        p) PASSWORD="$OPTARG" ;;
+        n) PORT="$OPTARG" ;;
+        v) VERBOSE=1 ;;
+        V) echo "fence_mikrotik_port version $VERSION"; exit 0 ;;
+        h) usage; exit 0 ;;
+        *) usage; exit 1 ;;
+    esac
+done
+
+# Handle metadata action early
+if [ "$ACTION" = "metadata" ]; then
+    metadata
+    exit 0
+fi
+
+# Validate required parameters
+if [ -z "$IP" ] || [ -z "$USERNAME" ] || [ -z "$PASSWORD" ]; then
+    log_msg "ERROR: IP, username, and password are required"
+    usage
+    exit 1
+fi
+
+# For list action, port is not required
+if [ "$ACTION" != "list" ] && [ -z "$PORT" ]; then
+    log_msg "ERROR: Port name is required for this action"
+    usage
+    exit 1
+fi
+
+# Check dependencies
+check_dependencies
+
+# Execute the requested action
+case "$ACTION" in
+    "off")
+        fence_off
+        exit $?
+        ;;
+    "on")
+        fence_on
+        exit $?
+        ;;
+    "status")
+        get_port_status
+        exit $?
+        ;;
+    "list")
+        list_ports
+        exit $?
+        ;;
+    *)
+        log_msg "ERROR: Unknown action: $ACTION"
+        usage
+        exit 1
+        ;;
+esac

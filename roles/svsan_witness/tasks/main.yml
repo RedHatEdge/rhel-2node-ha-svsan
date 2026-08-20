@@ -1,0 +1,109 @@
+---
+# SvSAN witness (Neutral Storage Host) on the arbiter, as a container.
+#
+# TWO ARBITRATION SYSTEMS LIVE ON THIS HOST AND THEY ARE NOT THE SAME THING:
+#
+#   corosync-qnetd  arbitrates CLUSTER MEMBERSHIP — which node may run resources
+#   SvSAN NSH       arbitrates MIRROR OWNERSHIP   — which plex may serve data
+#
+# They are deliberately co-located so they share a failure domain and partition
+# identically. If they lived on different hosts, a partition could leave the
+# cluster believing node1 should run everything while the mirror believed node2's
+# plex was authoritative. See docs/09 §5.
+#
+# Shipped as a container so the witness can live on any RHEL 9 host with podman,
+# rather than requiring a dedicated appliance VM. StorMagic publish the witness
+# only as an armhf .deb and a vSphere appliance; the amd64 binaries are lifted
+# from their own vCenter plugin appliance by containers/nsh-witness/extract-nsh.sh.
+
+- name: Install podman
+  ansible.builtin.dnf:
+    name: podman
+    state: present
+
+- name: Check for the witness image on the control node
+  ansible.builtin.stat:
+    path: "{{ nsh_image_archive }}"
+  delegate_to: localhost
+  become: false
+  register: _img
+
+- name: Explain how to build the witness image
+  ansible.builtin.fail:
+    msg: |
+      Witness image archive not found at {{ nsh_image_archive }}.
+
+      Build it once on the control node:
+
+        containers/nsh-witness/extract-nsh.sh ~/Downloads/svsan_*_plugin_ova.zip
+        podman build -t {{ nsh_image }} containers/nsh-witness
+        podman save -o {{ nsh_image_archive }} {{ nsh_image }}
+
+      The binaries are StorMagic's and are not vendored in this repository.
+  when: not _img.stat.exists
+
+- name: Copy the witness image to the arbiter
+  ansible.builtin.copy:
+    src: "{{ nsh_image_archive }}"
+    dest: /var/tmp/nsh-witness.tar
+    mode: "0600"
+  register: _copied
+
+- name: Load the witness image
+  ansible.builtin.command: "podman load -i /var/tmp/nsh-witness.tar"
+  when: _copied.changed
+  changed_when: true
+
+- name: Install the quadlet unit
+  ansible.builtin.copy:
+    src: ../../containers/nsh-witness/nsh-witness.container
+    dest: /etc/containers/systemd/nsh-witness.container
+    mode: "0644"
+  register: _quadlet
+
+- name: Reload systemd for the quadlet
+  ansible.builtin.systemd:
+    daemon_reload: true
+  when: _quadlet.changed
+
+- name: Open the witness port
+  ansible.posix.firewalld:
+    port: "{{ svsan_witness_port }}/tcp"
+    permanent: true
+    immediate: true
+    state: enabled
+  failed_when: false
+
+- name: Allow witness discovery (multicast)
+  ansible.posix.firewalld:
+    port: "{{ svsan_witness_port }}/udp"
+    permanent: true
+    immediate: true
+    state: enabled
+  failed_when: false
+
+- name: Start the witness
+  ansible.builtin.systemd:
+    name: nsh-witness
+    state: "{{ 'restarted' if _quadlet.changed else 'started' }}"
+    enabled: true
+
+- name: Confirm the witness is listening
+  ansible.builtin.wait_for:
+    port: "{{ svsan_witness_port }}"
+    host: 127.0.0.1
+    timeout: 60
+  register: _listen
+  failed_when: false
+
+- name: Report witness status
+  ansible.builtin.debug:
+    msg: |
+      {{ 'Witness LISTENING on ' ~ ansible_default_ipv4.address | default(inventory_hostname)
+          ~ ':' ~ svsan_witness_port
+         if not _listen.failed | default(false)
+         else 'Witness NOT listening — check: journalctl -u nsh-witness' }}
+
+      Point each VSA at it: Discovery -> Add Entry, then create mirrored targets
+      with isolation policy 'Majority' rather than 'Up'. Majority is what gives
+      the mirror split-brain protection; Up has none.

@@ -1,0 +1,21 @@
+---
+# Apply iSCSI and multipath failover timing, then re-establish sessions so the
+# new values are actually in force.
+#
+#   make svsan-tune
+#
+# iscsid.conf is read at LOGIN, so changing it does nothing to sessions that are
+# already up. Existing node records must be updated and the sessions rebuilt, or
+# the tuning silently has no effect and the next failover test measures the old
+# numbers.
+
+- name: Tune failover timing
+  hosts: cluster
+  become: true
+  vars:
+    storage_backend: svsan
+  tasks:
+    - name: Apply failover timing and rebuild sessions
+      ansible.builtin.include_role:
+        name: storage_svsan
+        tasks_from: tuning

@@ -1,0 +1,27 @@
+---
+# Common substrate — identical for both storage options.
+# Run this first. It is the 80% that both tracks share.
+#
+#   ansible-playbook playbooks/00-substrate.yml
+
+- name: Arbiter — corosync-qnetd
+  hosts: arbiter
+  become: true
+  roles:
+    - qnetd_server
+
+- name: Cluster nodes — base, network, KVM
+  hosts: cluster
+  become: true
+  roles:
+    - common_base
+    - host_network
+    - kvm_host
+
+- name: Cluster nodes — Pacemaker, quorum device, fencing
+  hosts: cluster
+  become: true
+  roles:
+    - ha_cluster
+    - qdevice
+    - fencing

@@ -1,0 +1,267 @@
+---
+# Two networks:
+#   br-lan  — ring0, management, and the bridge guests attach to
+#   repl    — ring1, plus replication traffic (DRBD sync, or SvSAN mirror+iSCSI)
+#
+# Connections are bound by MAC ADDRESS, not interface name. Names shift when
+# firmware or hardware changes; MACs do not. NetworkManager will claim the right
+# adapter regardless of what the kernel decided to call it this boot.
+#
+# The storage network can be untagged (its own physical switch port) or tagged
+# on a VLAN — set repl_vlan_id in group_vars.
+
+- name: Install NetworkManager tooling
+  ansible.builtin.dnf:
+    name:
+      - NetworkManager
+    state: present
+  failed_when: false
+  when: not is_bootc | bool
+
+- name: Require a management MAC
+  ansible.builtin.assert:
+    that: control_mac | default('') | length > 0
+    fail_msg: >
+      control_mac is not set for {{ inventory_hostname }}.
+      Run playbooks/01-discover.yml first — it pins interfaces by MAC.
+
+# ============================================================ management / ring0
+- name: Create the management bridge
+  community.general.nmcli:
+    conn_name: "{{ lan_bridge }}"
+    ifname: "{{ lan_bridge }}"
+    type: bridge
+    ip4: "{{ lan_ip }}/{{ lan_prefix }}"
+    gw4: "{{ lan_gateway }}"
+    dns4: "{{ lan_dns }}"
+    stp: false
+    state: present
+
+# Bound by MAC so the correct adapter is enslaved even if renamed.
+- name: Enslave the management adapter to the bridge
+  community.general.nmcli:
+    conn_name: "br-slave-mgmt"
+    type: bridge-slave
+    ifname: "{{ control_nic }}"
+    mac: "{{ control_mac }}"
+    master: "{{ lan_bridge }}"
+    state: present
+
+# ============================================================ storage / ring1
+- name: Decide how the storage interface is attached
+  ansible.builtin.set_fact:
+    _repl_tagged: "{{ (repl_vlan_id | default(0) | int) > 0 }}"
+    _repl_parent: "{{ repl_nic if (repl_mac | default('') | length > 0) else control_nic }}"
+    _repl_parent_mac: "{{ repl_mac if (repl_mac | default('') | length > 0) else control_mac }}"
+
+- name: Warn when the storage VLAN shares the management adapter
+  ansible.builtin.debug:
+    msg: >
+      {{ inventory_hostname }} has no dedicated storage adapter — VLAN
+      {{ repl_vlan_id }} will be tagged onto the management interface. Ring
+      redundancy is reduced and replication shares bandwidth with management.
+  when:
+    - _repl_tagged
+    - repl_mac | default('') | length == 0
+
+- name: Fail if the storage network has nowhere to live
+  ansible.builtin.assert:
+    that: (repl_mac | default('') | length > 0) or _repl_tagged
+    fail_msg: >
+      {{ inventory_hostname }} has no second NIC and no repl_vlan_id set. Either
+      fit a second adapter, or set repl_vlan_id in group_vars to tag the storage
+      VLAN onto the management interface.
+
+# ── storage interface as a BRIDGE (Option A only) ──────────────────────────
+#
+# Option A needs the VSA attached to the storage segment, and the host must be
+# able to reach its OWN VSA because the host is the iSCSI initiator logging into
+# it. macvtap cannot do that — a macvtap guest can reach every host except the
+# one it runs on — so the storage NIC has to be a real bridge, exactly as the
+# VSA and the VMkernel port share a vSwitch on ESXi.
+#
+# DRBD does not need this, so it is opt-in via repl_as_bridge.
+#
+# Safe to run against a live cluster: Ansible connects over the MANAGEMENT ring
+# ({{ lan_bridge }}), so reconfiguring the storage NIC never cuts our own
+# connection. It does briefly interrupt corosync ring1 and DRBD replication —
+# put the cluster in maintenance mode first (playbook does this).
+- name: Create the storage bridge
+  register: _brrepl
+  community.general.nmcli:
+    conn_name: "{{ repl_bridge }}"
+    ifname: "{{ repl_bridge }}"
+    type: bridge
+    ip4: "{{ repl_ip }}/{{ repl_prefix }}"
+    stp: false
+    method4: manual
+    never_default4: true
+    state: present
+  when: repl_as_bridge | default(false) | bool
+
+- name: Note whether the storage bridge configuration actually changed
+  ansible.builtin.set_fact:
+    _repl_bridge_changed: "{{ _brrepl.changed | default(false) }}"
+
+- name: Enslave the storage adapter to the bridge
+  register: _brreplslave
+  community.general.nmcli:
+    conn_name: "br-slave-repl"
+    type: bridge-slave
+    ifname: "{{ repl_nic }}"
+    mac: "{{ repl_mac }}"
+    master: "{{ repl_bridge }}"
+    state: present
+  when: repl_as_bridge | default(false) | bool
+
+# The old flat profile still owns the device and would win on the next boot.
+- name: Remove the flat storage profile once bridged
+  ansible.builtin.command: "nmcli con delete '{{ repl_iface_name }}'"
+  register: _delrepl
+  changed_when: _delrepl.rc == 0
+  failed_when: false
+  when: repl_as_bridge | default(false) | bool
+
+# Only activate when the profile actually changed. NetworkManager reasserting a
+# bridge evicts ports it does not own — including libvirt's tap devices — so an
+# unconditional `nmcli con up` silently disconnects every running VSA on the
+# host. libvirt still reports the interface as attached, which makes it a
+# genuinely hard fault to see.
+- name: Bring the storage bridge up
+  ansible.builtin.command: "nmcli con up {{ item }}"
+  loop: ["br-slave-repl", "{{ repl_bridge }}"]
+  register: _replup
+  changed_when: "'successfully activated' in _replup.stdout"
+  failed_when: false
+  when:
+    - repl_as_bridge | default(false) | bool
+    - _repl_bridge_changed | default(true) | bool
+
+# --- untagged: the adapter is on an access port in the storage VLAN ---
+- name: Configure the storage interface (untagged)
+  community.general.nmcli:
+    conn_name: "{{ repl_iface_name }}"
+    type: ethernet
+    ifname: "{{ repl_nic }}"
+    mac: "{{ repl_mac }}"
+    ip4: "{{ repl_ip }}/{{ repl_prefix }}"
+    never_default4: true
+    state: present
+  when:
+    - not _repl_tagged
+    - not (repl_as_bridge | default(false) | bool)
+    - repl_mac | default('') | length > 0
+
+# --- tagged: parent carries no IP, the VLAN child does ---
+- name: Configure the VLAN parent (no address)
+  community.general.nmcli:
+    conn_name: "{{ repl_iface_name }}-parent"
+    type: ethernet
+    ifname: "{{ _repl_parent }}"
+    mac: "{{ _repl_parent_mac }}"
+    method4: disabled
+    method6: disabled
+    state: present
+  when: _repl_tagged and repl_mac | default('') | length > 0
+
+- name: Configure the storage VLAN interface
+  community.general.nmcli:
+    conn_name: "{{ repl_iface_name }}"
+    type: vlan
+    vlandev: "{{ _repl_parent }}"
+    vlanid: "{{ repl_vlan_id }}"
+    ifname: "{{ _repl_parent }}.{{ repl_vlan_id }}"
+    ip4: "{{ repl_ip }}/{{ repl_prefix }}"
+    never_default4: true
+    state: present
+  when: _repl_tagged
+
+# The installer leaves a per-NIC profile holding the static address (the
+# kickstart's `network --device=...` line). It autoconnects on boot and wins the
+# device, so br-slave-mgmt never activates and the bridge comes up with an
+# address but NO member port — guests attached to it would have no path off the
+# host. Remove any profile that is not ours before activating the bridge.
+# Profiles this role owns. Anything else bound to our NICs is installer residue
+# and gets removed below.
+#
+# br-slave-repl MUST be listed. It is created by the bridge tasks above, and the
+# cleanup below runs after them — omit it and the cleanup deletes the bridge's
+# only member port, leaving br-repl up with an address but no path off the host.
+# The storage ring then goes dark and DRBD drops to Connecting.
+- name: Enumerate the profiles this role owns
+  ansible.builtin.set_fact:
+    _keep_profiles: >-
+      {{ [lan_bridge, 'br-slave-mgmt', repl_iface_name, repl_iface_name ~ '-parent']
+         + ([repl_bridge, 'br-slave-repl'] if (repl_as_bridge | default(false) | bool) else []) }}
+
+- name: Find stale per-NIC profiles left by the installer
+  ansible.builtin.shell: |
+    set -o pipefail
+    nmcli -t -f NAME,DEVICE,TYPE con show | awk -F: -v keep="{{ _keep_profiles | join(',') }}" '
+      BEGIN { n=split(keep,k,","); for(i=1;i<=n;i++) K[k[i]]=1 }
+      $3 ~ /ethernet|vlan|bridge/ && !($1 in K) && ($2=="{{ control_nic }}" || $2=="{{ repl_nic }}") { print $1 }'
+  args:
+    executable: /bin/bash
+  register: _stale
+  changed_when: false
+
+- name: Remove stale per-NIC profiles
+  ansible.builtin.command: "nmcli con delete '{{ item }}'"
+  loop: "{{ _stale.stdout_lines }}"
+  when: _stale.stdout_lines | length > 0
+  changed_when: true
+
+# Same hazard as the storage bridge: only reassert when something changed, or
+# every run kicks running guests off the management bridge too.
+- name: Bring connections up
+  ansible.builtin.command: "nmcli con up {{ item }}"
+  loop: "{{ ['br-slave-mgmt', lan_bridge] + ([repl_iface_name] if not (repl_as_bridge | default(false) | bool) else []) }}"
+  register: _up
+  changed_when: "'successfully activated' in _up.stdout"
+  failed_when: false
+  when: _stale.stdout_lines | length > 0 or _brrepl.changed | default(false) or _brreplslave.changed | default(false)
+
+# ============================================================ firewall
+- name: Open the high-availability service
+  ansible.posix.firewalld:
+    service: high-availability
+    permanent: true
+    immediate: true
+    state: enabled
+
+- name: Trust the storage network
+  ansible.posix.firewalld:
+    source: "{{ repl_network }}"
+    zone: trusted
+    permanent: true
+    immediate: true
+    state: enabled
+
+# ============================================================ verify
+- name: Confirm the peer answers on both rings
+  ansible.builtin.command: "ping -c2 -W3 {{ item }}"
+  loop:
+    - "{{ hostvars[groups['cluster'] | difference([inventory_hostname]) | first].lan_ip }}"
+    - "{{ hostvars[groups['cluster'] | difference([inventory_hostname]) | first].repl_ip }}"
+  changed_when: false
+  register: _ping
+  failed_when: false
+
+- name: Report ring reachability
+  ansible.builtin.debug:
+    msg: |
+      ring0 (management) : {{ 'ok' if _ping.results[0].rc == 0 else 'UNREACHABLE' }}
+      ring1 (storage)    : {{ 'ok' if _ping.results[1].rc == 0 else 'UNREACHABLE — check the switch VLAN' }}
+
+- name: Fail if the storage ring is dead
+  ansible.builtin.assert:
+    that: _ping.results[1].rc == 0
+    fail_msg: |
+      {{ inventory_hostname }} cannot reach its peer on the storage network
+      ({{ repl_network }}{{ ', VLAN ' ~ repl_vlan_id if _repl_tagged else ', untagged' }}).
+
+      Check on the switch:
+        - both node ports carry VLAN {{ repl_vlan_id | default('(untagged)') }}
+        - tagged vs untagged matches repl_vlan_id
+        - the ports are not isolated from each other
+  when: groups['cluster'] | length > 1

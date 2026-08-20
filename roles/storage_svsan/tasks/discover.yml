@@ -1,0 +1,174 @@
+---
+# Present the mirrored target to the hosts: discover, log in, confirm multipath.
+#
+#   make svsan-attach          (playbook -t discover)
+#
+# PREREQUISITE, and it is not optional: each host's IQN must be in the target's
+# access control list on the VSA. A target with an empty ACL accepts nobody, and
+# the appliance reports it only as an informational event — "Target 'pos' has an
+# empty access control list" — so the failure looks like a network problem from
+# the host side.
+#
+# Every host discovers BOTH VSAs. The local one serves reads; the peer exists so
+# the host survives losing its own appliance. That is the whole reason a mirror
+# is worth having, and it is also why the storage NIC had to become a bridge —
+# the local path is a host talking to a guest it runs itself.
+
+# EVERY iscsiadm call here is bounded by `timeout`, and that is not defensive
+# padding. `sendtargets` against a portal whose VSA is down does not fail — it
+# blocks, indefinitely, and takes the whole play with it. That is exactly what
+# happened while one appliance was powered off for a failure test: the play hung
+# rather than reporting that a VSA was unreachable.
+#
+# A storage play must survive being run while storage is degraded. That is when
+# someone is most likely to run it.
+- name: Discover targets on both VSAs
+  ansible.builtin.command: "timeout {{ iscsi_cmd_timeout }} iscsiadm -m discovery -t sendtargets -p {{ item }}:3260"
+  loop: "{{ svsan_vsa_san_ip.values() | list }}"
+  register: _disc
+  changed_when: "'New discovery record' in _disc.stdout"
+  failed_when: false
+
+- name: Note any VSA that did not answer discovery
+  ansible.builtin.debug:
+    msg: >-
+      {{ _disc.results | selectattr('rc','ne',0) | map(attribute='item') | list
+         | ternary('UNREACHABLE: ' ~ (_disc.results | selectattr('rc','ne',0)
+           | map(attribute='item') | join(', ')) ~ ' — continuing with the rest',
+           'both VSAs answered') }}
+
+- name: Report what was discovered
+  ansible.builtin.debug:
+    msg: "{{ _disc.results | map(attribute='stdout_lines') | flatten | select('search','iqn') | list }}"
+
+# sendtargets advertises EVERY portal the target is presented on, and with iSCSI
+# enabled on the management interface (which the mirror needs for its failover
+# path) that includes the management addresses. Logging into those puts host
+# storage traffic on the store LAN.
+#
+# The mirror's redundancy and the host's data path are separate concerns riding
+# the same flag: keep both interfaces iSCSI-enabled so VSA-to-VSA traffic can
+# fail over, but restrict the INITIATOR to the storage segment.
+- name: Discard node records for portals outside the storage segment
+  ansible.builtin.shell: |
+    set -o pipefail
+    keep="{{ svsan_vsa_san_ip.values() | join('|') }}"
+    iscsiadm -m node 2>/dev/null | awk '{print $1}' | sort -u | while read -r p; do
+      ip="${p%%:*}"
+      echo "$ip" | grep -qE "^($keep)$" && continue
+      timeout 10 iscsiadm -m node -o delete -p "$p" 2>/dev/null && echo "dropped $p"
+    done
+  args:
+    executable: /bin/bash
+  register: _drop
+  changed_when: _drop.stdout | length > 0
+
+- name: Report discarded portals
+  ansible.builtin.debug:
+    msg: "{{ _drop.stdout_lines | default(['none — all portals are on the storage segment']) }}"
+
+- name: Log in to all discovered targets
+  ansible.builtin.command: "timeout {{ iscsi_login_timeout }} iscsiadm -m node --loginall=automatic"
+  register: _login
+  changed_when: "'successful' in _login.stdout"
+  failed_when: false
+
+- name: Make sessions persist across reboot
+  ansible.builtin.command: "timeout {{ iscsi_cmd_timeout }} iscsiadm -m node -o update -n node.startup -v automatic"
+  changed_when: true
+  failed_when: false
+
+- name: Wait for the block device to appear
+  ansible.builtin.command: "timeout 10 iscsiadm -m session"
+  register: _sess
+  retries: 12
+  delay: 5
+  until: _sess.rc == 0
+  changed_when: false
+  failed_when: false
+
+- name: Rescan so multipath sees every path
+  ansible.builtin.command: "timeout {{ iscsi_cmd_timeout }} iscsiadm -m session --rescan"
+  changed_when: false
+  failed_when: false
+
+# The alias cannot be written before the target exists, because it binds to the
+# LUN's WWID and the WWID is only knowable once the target has been presented.
+# So: log in, read the WWIDs off the live paths, then write the real config.
+# Without this the devices come up as mpatha/mpathb and every guest definition
+# pointing at /dev/mapper/<name> is wrong.
+# Map each target NAME to its WWID. The device model is only ever "iSCSI Volume",
+# so it cannot identify which target a disk belongs to — but /dev/disk/by-path
+# encodes the target IQN, and the IQN ends in the target name. That is the only
+# reliable link between "the target called pos" and "this block device".
+- name: Map target names to WWIDs
+  ansible.builtin.shell: |
+    set -o pipefail
+    for name in {{ svsan_targets | map(attribute='name') | join(' ') }}; do
+      for p in /dev/disk/by-path/*iscsi*"${name}"-lun-*; do
+        [ -e "$p" ] || continue
+        dev=$(readlink -f "$p")
+        wwid=$(/lib/udev/scsi_id -g -u -d "$dev" 2>/dev/null) || continue
+        echo "$name $wwid"
+        break
+      done
+    done | sort -u
+  args:
+    executable: /bin/bash
+  register: _wwids
+  changed_when: false
+  failed_when: false
+
+- name: Report the name-to-WWID mapping
+  ansible.builtin.debug:
+    msg: "{{ _wwids.stdout_lines | default(['no LUNs mapped — is the target in the ACL?']) }}"
+
+- name: Bind multipath aliases to the discovered WWIDs
+  ansible.builtin.blockinfile:
+    path: /etc/multipath.conf
+    marker: "# {mark} ANSIBLE svsan aliases"
+    insertafter: EOF
+    block: |
+      multipaths {
+      {% for line in _wwids.stdout_lines | default([]) %}
+          multipath {
+              wwid    {{ line.split()[1] }}
+              alias   {{ line.split()[0] }}
+          }
+      {% endfor %}
+      }
+  when: _wwids.stdout_lines | default([]) | length > 0
+
+- name: Reload multipath
+  ansible.builtin.systemd:
+    name: multipathd
+    state: restarted
+
+- name: Collect the multipath topology
+  ansible.builtin.command: multipath -ll
+  register: _mp
+  changed_when: false
+  failed_when: false
+
+- name: Show sessions and paths
+  ansible.builtin.debug:
+    msg: |
+      iSCSI sessions on {{ inventory_hostname }}:
+      {{ _sess.stdout | default('none') }}
+
+      Multipath:
+      {{ _mp.stdout | default('none') }}
+
+- name: Fail clearly when the target is not visible
+  ansible.builtin.assert:
+    that: _sess.stdout | default('') is search('iqn')
+    fail_msg: |
+      {{ inventory_hostname }} has no iSCSI session to either VSA.
+
+      Almost always the target's access control list, not the network. Check on
+      the VSA that this host's IQN is assigned to the target:
+
+        {{ iscsi_initiator_prefix }}:{{ node_name }}
+
+      Confirm reachability first — both should be open:
+        {% for ip in svsan_vsa_san_ip.values() %}{{ ip }}:3260  {% endfor %}

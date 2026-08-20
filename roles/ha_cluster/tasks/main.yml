@@ -1,0 +1,119 @@
+---
+# Corosync/Pacemaker with knet and TWO links.
+# knet is the default and only supported transport on RHEL 8/9 and carries up
+# to 8 links per node with configurable priorities.
+
+- name: Install cluster packages
+  ansible.builtin.dnf:
+    name:
+      - pcs
+      - pacemaker
+      - corosync
+      - resource-agents
+      - fence-agents-all
+    state: present
+  when: not is_bootc | bool
+
+- name: Set hacluster password
+  ansible.builtin.user:
+    name: hacluster
+    password: "{{ hacluster_password | password_hash('sha512') }}"
+
+- name: Enable and start pcsd
+  ansible.builtin.systemd:
+    name: pcsd
+    enabled: true
+    state: started
+
+- name: Check whether the cluster already exists
+  ansible.builtin.stat:
+    path: /etc/corosync/corosync.conf
+  register: _corosync_conf
+
+# ---------------------------------------------------------------- bootstrap
+- name: Authenticate cluster nodes
+  ansible.builtin.command: >
+    pcs host auth {{ node1_name }} {{ node2_name }}
+    -u hacluster -p {{ hacluster_password }}
+  run_once: true
+  delegate_to: "{{ node1_name }}"
+  when: not _corosync_conf.stat.exists
+  changed_when: true
+  no_log: true
+
+# Each addr= is a link, in order. First = ring0 (LAN), second = ring1 (repl).
+- name: Create the cluster with two knet links
+  ansible.builtin.command: >
+    pcs cluster setup {{ cluster_name }} --force
+    {{ node1_name }}
+      addr={{ hostvars[node1_name].lan_ip }}
+      addr={{ hostvars[node1_name].repl_ip }}
+    {{ node2_name }}
+      addr={{ hostvars[node2_name].lan_ip }}
+      addr={{ hostvars[node2_name].repl_ip }}
+    transport knet
+  run_once: true
+  delegate_to: "{{ node1_name }}"
+  when: not _corosync_conf.stat.exists
+  changed_when: true
+
+- name: Start and enable the cluster on all nodes
+  ansible.builtin.command: "pcs cluster {{ item }} --all"
+  loop: [start, enable]
+  run_once: true
+  delegate_to: "{{ node1_name }}"
+  when: not _corosync_conf.stat.exists
+  changed_when: true
+
+- name: Wait for both nodes to come online
+  ansible.builtin.command: pcs status nodes corosync
+  register: _nodes
+  until: >
+    node1_name in (_nodes.stdout | default('')) and
+    node2_name in (_nodes.stdout | default(''))
+  retries: 20
+  delay: 5
+  run_once: true
+  delegate_to: "{{ node1_name }}"
+  changed_when: false
+
+# ---------------------------------------------------------------- properties
+- name: Set cluster properties
+  ansible.builtin.command: "pcs property set {{ item }}"
+  loop:
+    - stonith-enabled=true
+    - start-failure-is-fatal=false
+    - cluster-recheck-interval=60s
+  run_once: true
+  delegate_to: "{{ node1_name }}"
+  changed_when: true
+
+# Deliberate: no-quorum-policy is left at its default (stop).
+# The old lab repo set no-quorum-policy=ignore, which is correct ONLY for a
+# 2-node cluster with no arbiter. With a qdevice supplying a third vote it
+# throws away the tie-breaking the arbiter exists to provide.
+- name: Assert no-quorum-policy has not been overridden
+  ansible.builtin.command: pcs property config no-quorum-policy
+  register: _nqp
+  run_once: true
+  delegate_to: "{{ node1_name }}"
+  changed_when: false
+  failed_when: "'ignore' in _nqp.stdout"
+
+- name: Set resource defaults
+  ansible.builtin.command: "pcs resource defaults update {{ item }}"
+  loop:
+    - resource-stickiness=1000
+    - migration-threshold=3
+  run_once: true
+  delegate_to: "{{ node1_name }}"
+  changed_when: true
+
+- name: Confirm both knet links are up
+  ansible.builtin.command: corosync-cfgtool -s
+  register: _rings
+  changed_when: false
+
+- name: Show link status
+  ansible.builtin.debug:
+    var: _rings.stdout_lines

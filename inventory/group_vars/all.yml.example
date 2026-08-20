@@ -1,0 +1,87 @@
+---
+# ═══════════════════════════════════════════════════════════════════════════
+#  Two-node RHEL KVM HA cluster — StorMagic SvSAN shared storage
+#
+#  Copy this file to all.yml and work down it. Anything marked REPLACE will not
+#  work until you change it; everything else has a working default.
+#
+#      cp all.yml.example all.yml
+# ═══════════════════════════════════════════════════════════════════════════
+
+storage_backend: svsan
+
+# ═══ REPLACE THESE ═════════════════════════════════════════════════════════
+
+# The public key you will use to reach the guests.
+guest_ssh_key: "ssh-ed25519 REPLACE-WITH-YOUR-PUBLIC-KEY you@example.com"
+
+# BMC credentials, for fencing. Use a vault in anything but a lab.
+redfish_user: "REPLACE-WITH-BMC-USERNAME"
+redfish_password: "REPLACE-WITH-BMC-PASSWORD"
+
+# Red Hat subscription, if your nodes are not already registered.
+rhsm_activation_key: "REPLACE-WITH-YOUR-ACTIVATION-KEY"
+rhsm_org_id: "REPLACE-WITH-YOUR-ORG-ID"
+
+# ═══ NETWORKS ══════════════════════════════════════════════════════════════
+# Two segments. The storage one carries replication and needs no gateway —
+# it should not route anywhere.
+
+lan_bridge: br-lan                  # management, corosync ring0
+lan_prefix: 24
+lan_gateway: 172.16.7.1
+lan_dns: 172.16.7.1
+
+repl_iface_name: repl               # storage, corosync ring1
+repl_bridge: br-repl
+repl_prefix: 24
+repl_network: 172.18.8.0/24
+repl_vlan_id: 0                     # 0 if your switch ports are untagged
+
+# ═══ QUORUM ════════════════════════════════════════════════════════════════
+# A two-node cluster cannot tell a dead peer from an unreachable one. The
+# arbiter casts the deciding vote. Do not substitute two_node: 1.
+
+qnetd_host: 172.16.7.20             # your arbiter's address
+fence_backend: redfish
+
+# ═══ GUESTS ════════════════════════════════════════════════════════════════
+# Two Ubuntu VMs, one per node, each able to run on either.
+
+guest_macs:
+  app: "52:54:00:60:01:01"
+  database: "52:54:00:60:02:01"
+
+guest_vms:
+  - { name: app,      home_node: node1, memory_mb: 4096, vcpus: 2 }
+  - { name: database, home_node: node2, memory_mb: 8192, vcpus: 4 }
+
+guest_image_url: https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img
+
+# ═══ StorMagic appliance ═══════════════════════════════════════════════════
+# The appliance derives its serial number from the MAC of its first interface,
+# so setting these explicitly keeps its identity stable across rebuilds.
+# Any locally-administered MACs will do; these are fine to leave as they are.
+svsan_vsa_macs:
+  node1: { mgmt: "52:54:00:53:01:01", san: "52:54:00:53:01:02" }
+  node2: { mgmt: "52:54:00:53:02:01", san: "52:54:00:53:02:02" }
+
+# Addresses the appliances take on each network.
+svsan_vsa_ip:      { node1: 172.16.7.30, node2: 172.16.7.31 }   # management
+svsan_vsa_san_ip:  { node1: 172.18.8.20, node2: 172.18.8.21 }   # storage
+
+# How much of the data disk to give the appliance.
+svsan_pool_vg: vgstore
+svsan_pool_lv_name: lv-svsan-pool
+svsan_pool_lv_size: 90G
+
+# Targets to create. One per guest.
+svsan_targets:
+  - { name: app,      size_gb: 20, home_node: node1 }
+  - { name: database, size_gb: 40, home_node: node2 }
+
+# ═══ DEFAULTS — usually fine as they are ═══════════════════════════════════
+
+os_mode: bootc
+node1_name: node1
+node2_name: node2

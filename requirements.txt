@@ -1,0 +1,6 @@
+# Python dependencies for the Ansible control node.
+# Installed into .venv/ by `make venv` — never into the system Python.
+ansible-core>=2.16,<2.20
+jmespath          # json_query filter
+netaddr           # ipaddr filters used in network validation
+passlib           # password_hash for the hacluster account

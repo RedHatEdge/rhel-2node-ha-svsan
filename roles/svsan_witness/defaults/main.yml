@@ -1,0 +1,11 @@
+---
+# Witness settings. Kept here rather than in storage_svsan's defaults because the
+# witness runs on the ARBITER, which is a different play with a different role
+# set — a role cannot see another role's defaults.
+
+# Mirror quorum port. Distinct from corosync-qnetd's 5403, which arbitrates
+# cluster membership on the same host.
+svsan_witness_port: 4174
+
+nsh_image: localhost/nsh-witness:6.7.0.3
+nsh_image_archive: "{{ playbook_dir }}/../lab/svsan/images/nsh-witness.tar"

@@ -1,0 +1,198 @@
+# bootc-image-builder configuration.
+#
+# One image serves both nodes. Identity is resolved at INSTALL time by matching
+# the machine's own MAC addresses against a table in the kickstart, so each node
+# comes up with the right hostname and static addresses on both subnets the
+# moment it reboots. No DHCP.
+#
+# Disk selection is NOT hardcoded either. The %pre script inspects the actual
+# hardware at install time and decides, so this ISO works on any machine without
+# knowing device names in advance. That removes the chicken-and-egg of needing
+# hardware facts before the image can be built — and it is what lets the same
+# media install both nodes even though their disk enumeration is reversed
+# (node1: nvme0n1 = OS; node2: nvme1n1 = OS).
+#
+# NOTE: user accounts are created in the kickstart's %post rather than with
+# [[customizations.user]]. bootc-image-builder rejects a config that has both,
+# and the %pre logic is worth more than the convenience block.
+
+[customizations.kernel]
+append = "net.ifnames=1 biosdevname=0"
+
+[customizations]
+hostname = "store-node"
+
+[customizations.timezone]
+timezone = "America/Chicago"
+
+[customizations.installer.kickstart]
+contents = """
+text
+reboot
+
+timezone America/Chicago --utc
+selinux --enforcing
+firewall --enabled --service=ssh
+
+# Key-only root access. The Containerfile already sets
+# PermitRootLogin prohibit-password and disables password auth.
+rootpw --lock
+
+# ---------------------------------------------------------------------------
+# Network and hostname, decided at install time by MAC address.
+#
+# No DHCP. Both interfaces get their static addresses here, so each node is on
+# the right subnet at first boot rather than after Ansible runs:
+#
+#   control / VLAN 12  172.16.7.0/24   gw .1     -> node1 .10  node2 .11
+#   storage / VLAN 18  172.18.8.0/24   no gw     -> node1 .10  node2 .11
+#
+# One ISO still installs both nodes — the %pre matches this machine's MACs
+# against the table and emits only the lines that apply.
+#
+# host_network later moves the control address onto the br-lan bridge (guests
+# attach to it) and re-asserts the storage address. Same values, so the change
+# is a no-op if the install already got it right.
+# ---------------------------------------------------------------------------
+%pre --interpreter=/bin/bash --log=/tmp/pre-net.log
+
+# control_mac|hostname|control_ip|storage_mac|storage_ip
+NODES="
+00:00:01:04:0c:d9|node1|172.16.7.10|00:00:01:04:0c:da|172.18.8.10
+00:00:01:04:18:f9|node2|172.16.7.11|00:00:01:04:18:fa|172.18.8.11
+"
+GW=172.16.7.1
+DNS=172.16.7.1
+MASK=255.255.255.0
+
+macs=""
+for d in /sys/class/net/*; do
+  n=$(basename "$d")
+  [ "$n" = "lo" ] && continue
+  [ -e "$d/device" ] || continue
+  m=$(cat "$d/address" 2>/dev/null | tr 'A-Z' 'a-z')
+  [ -n "$m" ] && macs="$macs $m"
+done
+
+MATCH=""
+for m in $macs; do
+  row=$(echo "$NODES" | grep -i "^${m}|" || true)
+  [ -n "$row" ] && { MATCH="$row"; break; }
+done
+
+if [ -n "$MATCH" ]; then
+  CMAC=$(echo "$MATCH" | cut -d"|" -f1)
+  HOST=$(echo "$MATCH" | cut -d"|" -f2)
+  CIP=$(echo  "$MATCH" | cut -d"|" -f3)
+  SMAC=$(echo "$MATCH" | cut -d"|" -f4)
+  SIP=$(echo  "$MATCH" | cut -d"|" -f5)
+
+  # Control carries the gateway and hostname. Storage deliberately has NO
+  # gateway — it is a storage-only segment and must not route anywhere.
+  cat > /tmp/net-include <<EOF
+network --device=$CMAC --bootproto=static --ip=$CIP --netmask=$MASK \
+        --gateway=$GW --nameserver=$DNS --hostname=$HOST --activate --onboot=yes
+network --device=$SMAC --bootproto=static --ip=$SIP --netmask=$MASK \
+        --nodefroute --activate --onboot=yes
+EOF
+  {
+    echo "Matched $HOST"
+    echo "  control  $CMAC -> $CIP  (gw $GW)"
+    echo "  storage  $SMAC -> $SIP  (no gateway)"
+  } > /tmp/net-decision.log
+else
+  cat > /tmp/net-include <<EOF
+network --bootproto=dhcp --device=link --activate
+EOF
+  echo "NO MAC MATCH — fell back to DHCP. Add this machine to the NODES table." \
+    > /tmp/net-decision.log
+  for d in /sys/class/net/*; do
+    n=$(basename "$d"); [ -e "$d/device" ] || continue
+    echo "  seen: $n $(cat $d/address 2>/dev/null)" >> /tmp/net-decision.log
+  done
+fi
+%end
+
+%include /tmp/net-include
+
+# ---------------------------------------------------------------------------
+# Disk selection, decided at install time.
+#
+# Rules:
+#   * Removable and USB devices are excluded, so the install stick is never a
+#     candidate.
+#   * Two or more fixed disks -> the SMALLEST becomes the OS disk, everything
+#     else is left completely untouched for the storage layer to claim.
+#   * Exactly one fixed disk  -> the OS gets a bounded 120 GB volume group and
+#     the remainder is left unallocated.
+#
+# The decision is written to /root/disk-layout.log on the installed system so
+# it can be checked against os_device in host_vars.
+# ---------------------------------------------------------------------------
+%pre --interpreter=/bin/bash --log=/tmp/pre-disk.log
+
+FIXED=""
+for d in /sys/block/*; do
+  n=$(basename "$d")
+  case "$n" in loop*|ram*|sr*|zram*|dm-*|md*|fd*) continue ;; esac
+  [ "$(cat $d/removable 2>/dev/null)" = "1" ] && continue
+  readlink -f "$d/device" 2>/dev/null | grep -q usb && continue
+  sectors=$(cat "$d/size" 2>/dev/null || echo 0)
+  [ "$sectors" -gt 0 ] || continue
+  mb=$(( sectors / 2048 ))
+  [ "$mb" -lt 20000 ] && continue
+  FIXED="$FIXED $mb:$n"
+done
+
+SORTED=$(echo $FIXED | tr ' ' '\\n' | sort -n)
+COUNT=$(echo "$SORTED" | grep -c .)
+OSDISK=$(echo "$SORTED" | head -1 | cut -d: -f2)
+OSMB=$(echo "$SORTED"   | head -1 | cut -d: -f1)
+
+{
+  echo "Disks considered (size_MB:device):"
+  echo "$SORTED" | sed 's/^/  /'
+  echo "Chosen OS disk: $OSDISK (${OSMB} MB)"
+} > /tmp/disk-decision.log
+
+if [ "$COUNT" -ge 2 ]; then
+  cat > /tmp/part-include <<EOF
+ignoredisk --only-use=$OSDISK
+clearpart --all --initlabel --drives=$OSDISK
+autopart --type=lvm --nohome
+EOF
+  echo "Layout: OS on $OSDISK; all other disks left untouched" >> /tmp/disk-decision.log
+else
+  cat > /tmp/part-include <<EOF
+ignoredisk --only-use=$OSDISK
+clearpart --all --initlabel --drives=$OSDISK
+reqpart --add-boot
+part pv.01 --fstype=lvmpv --size=122880 --ondisk=$OSDISK
+volgroup vg_os pv.01
+logvol / --vgname=vg_os --name=lv_root --fstype=xfs --size=110000
+logvol swap --vgname=vg_os --name=lv_swap --fstype=swap --size=8192
+EOF
+  echo "Layout: single disk $OSDISK; 120 GB to the OS, remainder unallocated" >> /tmp/disk-decision.log
+fi
+%end
+
+%include /tmp/part-include
+
+%post --log=/root/ks-post.log
+mkdir -p /root/.ssh
+chmod 700 /root/.ssh
+cat > /root/.ssh/authorized_keys <<'KEYS'
+ssh-ed25519 AAAA...REPLACE-WITH-YOUR-PUBLIC-KEY... you@example.com
+KEYS
+chmod 600 /root/.ssh/authorized_keys
+restorecon -R /root/.ssh 2>/dev/null || true
+%end
+
+%post --nochroot
+for r in /mnt/sysroot /mnt/sysimage; do
+  [ -d "$r/root" ] || continue
+  cp /tmp/disk-decision.log "$r/root/disk-layout.log" 2>/dev/null || true
+  cp /tmp/net-decision.log  "$r/root/net-layout.log"  2>/dev/null || true
+done
+%end
+"""

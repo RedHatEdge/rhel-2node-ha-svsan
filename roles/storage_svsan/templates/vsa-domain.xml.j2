@@ -1,0 +1,103 @@
+{#
+  VSA domain definition.
+
+  The MAC on the FIRST interface is not cosmetic. The appliance derives its
+  Hardware ID — the serial StorMagic licences against — directly from it:
+
+      MAC 52:54:00:53:01:01  ->  Hardware ID 525400530101
+
+  Verified on 6.7.GA.54690. That makes licensing reproducible: rebuild the VSA
+  with the same MAC and the same licence still applies. It also means an
+  unpinned MAC silently re-licenses the appliance on every rebuild.
+
+  PCI slots are pinned too, so Interface 0 stays management and Interface 1
+  stays SAN regardless of how libvirt orders devices.
+#}
+<domain type='kvm'>
+  <name>{{ svsan_vsa_name }}</name>
+{% if svsan_vsa_uuid | default('') | length > 0 %}
+  <uuid>{{ svsan_vsa_uuid }}</uuid>
+{% endif %}
+  <memory unit='MiB'>{{ svsan_vsa_memory_mb }}</memory>
+  <vcpu>{{ svsan_vsa_vcpus }}</vcpu>
+  <os><type arch='x86_64' machine='q35'>hvm</type><boot dev='hd'/></os>
+  <features><acpi/><apic/></features>
+  <cpu mode='host-passthrough'/>
+  <clock offset='utc'/>
+  <on_reboot>restart</on_reboot>
+  <devices>
+{# No <emulator>: the path differs by distribution — /usr/libexec/qemu-kvm on
+   RHEL, /usr/bin/qemu-system-x86_64 on Debian — and libvirt picks correctly for
+   the domain type on its own. Hardcoding it breaks the play on RHEL. #}
+
+    {# boot device — the converted appliance image #}
+    <disk type='file' device='disk'>
+      <driver name='qemu' type='qcow2'/>
+      <source file='{{ svsan_vsa_image }}'/>
+      <target dev='vda' bus='virtio'/>
+    </disk>
+
+    {# journal — 20 GB, required from 6.7 onward #}
+    <disk type='file' device='disk'>
+      <driver name='qemu' type='qcow2'/>
+      <source file='{{ svsan_vsa_journal }}'/>
+      <target dev='vdb' bus='virtio'/>
+    </disk>
+
+    {# the storage the VSA serves: raw device in the store, file in the lab #}
+{% if svsan_vsa_pool_is_block | default(true) %}
+    <disk type='block' device='disk'>
+      <driver name='qemu' type='raw' cache='none' io='native'/>
+      <source dev='{{ svsan_pool_device }}'/>
+      <target dev='vdc' bus='virtio'/>
+    </disk>
+{% else %}
+    <disk type='file' device='disk'>
+      <driver name='qemu' type='qcow2'/>
+      <source file='{{ svsan_pool_device }}'/>
+      <target dev='vdc' bus='virtio'/>
+    </disk>
+{% endif %}
+
+    {# Interface 0 — management. THIS MAC BECOMES THE LICENCE SERIAL. #}
+    <interface type='{{ 'bridge' if svsan_vsa_mgmt_bridge is defined else 'network' }}'>
+      <mac address='{{ svsan_vsa_mgmt_mac }}'/>
+{% if svsan_vsa_mgmt_bridge is defined %}
+      <source bridge='{{ svsan_vsa_mgmt_bridge }}'/>
+{% else %}
+      <source network='{{ svsan_vsa_mgmt_network }}'/>
+{% endif %}
+      <model type='virtio'/>
+      <address type='pci' domain='0x0000' bus='0x01' slot='0x00' function='0x0'/>
+    </interface>
+
+    {# Interface 1 — SAN / mirror.
+       Omitted until the appliance is licensed. A fresh appliance DHCPs on every
+       interface and flags each as management. If anything serves DHCP on the
+       storage segment the appliance acquires a second default route, and which
+       route wins is a coin toss — one VSA reaches the licence server and the
+       other times out. That is exactly what happened on 19 August: identical
+       hosts, identical play, one activated and one could not.
+       Attach the storage NIC after activation, when Interface 1 can be given a
+       static, non-management, gateway-less address. #}
+{% if svsan_attach_san_nic | default(true) %}
+    <interface type='{{ 'bridge' if svsan_vsa_san_bridge is defined else 'network' }}'>
+      <mac address='{{ svsan_vsa_san_mac }}'/>
+{% if svsan_vsa_san_bridge is defined %}
+      <source bridge='{{ svsan_vsa_san_bridge }}'/>
+{% else %}
+      <source network='{{ svsan_vsa_san_network }}'/>
+{% endif %}
+      <model type='virtio'/>
+      <address type='pci' domain='0x0000' bus='0x02' slot='0x00' function='0x0'/>
+    </interface>
+{% endif %}
+
+    <serial type='pty'><target port='0'/></serial>
+    <console type='pty'><target type='serial' port='0'/></console>
+    <graphics type='vnc' port='-1' listen='127.0.0.1'/>
+    <video><model type='vga'/></video>
+    <controller type='pci' index='1' model='pcie-root-port'/>
+    <controller type='pci' index='2' model='pcie-root-port'/>
+  </devices>
+</domain>

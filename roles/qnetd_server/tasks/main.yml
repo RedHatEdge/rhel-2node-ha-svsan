@@ -1,0 +1,75 @@
+---
+# The arbiter host. Runs corosync-qnetd only.
+#
+# Facts from the Red Hat support policy (article 2823861):
+#   - qnetd MUST NOT be installed on a cluster node
+#   - it is NOT supported for a cluster to manage its own qnetd arbiter
+#   - one qdevice per cluster, one qnetd per qdevice
+#   - no architecture mixing; RHEL 9+ cannot mix majors with the cluster nodes
+#   - no hard limit on how many clusters may share one qnetd
+#   - the policy states NO latency requirement
+
+- name: Refuse to run on a cluster node
+  ansible.builtin.assert:
+    that: inventory_hostname not in groups['cluster']
+    fail_msg: "qnetd must not be installed on a cluster node."
+
+- name: Install corosync-qnetd
+  ansible.builtin.dnf:
+    name:
+      - corosync-qnetd
+      - pcs
+    state: present
+  when: not is_bootc | bool
+
+# qnetd will not start without its NSS certificate database. The package does
+# not create it, so a fresh install fails with
+# "Can't open NSS DB directory". This also generates the CA that the cluster
+# nodes' qdevice certificates are later signed against.
+- name: Initialise the qnetd NSS certificate database
+  ansible.builtin.command: corosync-qnetd-certutil -i
+  args:
+    creates: /etc/corosync/qnetd/nssdb/cert9.db
+
+- name: Enable and start qnetd
+  ansible.builtin.systemd:
+    name: corosync-qnetd
+    enabled: true
+    state: started
+
+- name: Set hacluster password on the arbiter
+  ansible.builtin.user:
+    name: hacluster
+    password: "{{ hacluster_password | password_hash('sha512') }}"
+
+- name: Enable and start pcsd
+  ansible.builtin.systemd:
+    name: pcsd
+    enabled: true
+    state: started
+
+- name: Open TCP 5403 for qdevice clients
+  ansible.posix.firewalld:
+    port: 5403/tcp
+    permanent: true
+    immediate: true
+    state: enabled
+  failed_when: false
+
+- name: Open high-availability service
+  ansible.posix.firewalld:
+    service: high-availability
+    permanent: true
+    immediate: true
+    state: enabled
+  failed_when: false
+
+- name: Show qnetd status
+  ansible.builtin.command: corosync-qnetd-tool -l
+  register: _qnetd
+  changed_when: false
+  failed_when: false
+
+- name: Report connected clusters
+  ansible.builtin.debug:
+    var: _qnetd.stdout_lines

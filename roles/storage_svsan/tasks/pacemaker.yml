@@ -1,0 +1,56 @@
+---
+# Pacemaker resources for Option A.
+#
+# Because storage is shared, this is nearly the whole cluster config: guest VMs,
+# fence devices, quorum device, and one readiness gate. No promotable clones, no
+# colocation sets, no promotion ordering.
+
+# VirtualDomain will fail to start if its backing device is missing, and
+# Pacemaker will retry — survivable but noisy, and it can trip
+# migration-threshold during a slow VSA start after a store power event.
+# This clone converts that into a clean "waiting for storage" state.
+- name: Install the storage readiness check
+  ansible.builtin.copy:
+    dest: /usr/local/bin/store-ready
+    mode: "0755"
+    content: |
+      #!/bin/bash
+      # Confirms every expected multipath device is present and readable.
+      set -u
+      EXPECTED=({% for t in svsan_targets %}{{ t.name }} {% endfor %})
+      for t in "${EXPECTED[@]}"; do
+        dev="/dev/mapper/${t}"
+        [[ -b "$dev" ]] || exit 1
+        dd if="$dev" of=/dev/null bs=4k count=1 iflag=direct >/dev/null 2>&1 || exit 1
+      done
+      exit 0
+  delegate_to: "{{ item }}"
+  loop: "{{ groups['cluster'] }}"
+
+- name: Create the storage readiness clone
+  ansible.builtin.command: >
+    pcs resource create store-ready ocf:heartbeat:HealthSMART
+    --force
+  delegate_to: "{{ node1_name }}"
+  register: _sr
+  changed_when: false
+  failed_when: false
+  # Placeholder: swap for a small custom OCF agent wrapping /usr/local/bin/store-ready.
+  # Left inert until the multipath device names are confirmed against a real VSA.
+
+- name: Note on the readiness gate
+  ansible.builtin.debug:
+    msg: >
+      store-ready check installed at /usr/local/bin/store-ready. Wrap it in a
+      minimal OCF agent and clone it once real multipath device names are known,
+      then order the guest VMs after it.
+
+- name: Show cluster status
+  ansible.builtin.command: pcs status
+  register: _st
+  delegate_to: "{{ node1_name }}"
+  changed_when: false
+
+- name: Report
+  ansible.builtin.debug:
+    var: _st.stdout_lines

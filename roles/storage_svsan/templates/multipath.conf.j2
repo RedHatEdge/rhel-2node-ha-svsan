@@ -1,0 +1,54 @@
+# Managed by Ansible — 2-node store platform, Option A (SvSAN)
+#
+# Each host has a path to BOTH VSAs. The local VSA should be preferred so reads
+# are served from local disk; the peer path exists for redundancy.
+#
+# The vendor string the LUN actually reports is "StorMagc" — eight characters,
+# which is the SCSI vendor field width. A device block matching "StorMagi.*"
+# never matches, and multipath then silently falls back to its defaults: the
+# device-specific ALUA settings below are simply not applied, both paths land in
+# one priority group, and every read is free to go to the REMOTE appliance. It
+# fails as a performance characteristic, not an error, which is the kind of thing
+# nobody notices until a store is slow.
+#
+# Still to confirm with StorMagic: whether the target advertises differentiated
+# ALUA states so the local path is genuinely preferred, or whether preference has
+# to be expressed some other way.
+
+defaults {
+    user_friendly_names     yes
+    find_multipaths         yes
+    path_grouping_policy    group_by_prio
+    prio                    alua
+    failback                immediate
+    no_path_retry           queue
+    dev_loss_tmo            {{ multipath_dev_loss_tmo }}
+    fast_io_fail_tmo        {{ multipath_fast_io_fail_tmo }}
+}
+
+blacklist {
+    devnode "^(ram|zram|raw|loop|fd|md|dm-|sr|scd|st)[0-9]*"
+    devnode "^nvme.*"
+}
+
+devices {
+    device {
+        vendor                  "StorMag.*"
+        product                 ".*"
+        path_grouping_policy    group_by_prio
+        prio                    alua
+        path_checker            tur
+        failback                immediate
+        no_path_retry           queue
+        rr_weight               uniform
+    }
+}
+
+multipaths {
+{% for t in svsan_targets %}
+    multipath {
+        # wwid  <fill in once the target exists: multipath -ll>
+        alias   {{ t.name }}
+    }
+{% endfor %}
+}

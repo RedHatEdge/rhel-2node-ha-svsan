@@ -1,0 +1,24 @@
+---
+# Present the mirrored target to the hosts — discover, log in, bind multipath.
+#
+#   make svsan-attach
+#
+# Separate from the build, because it cannot run until two things are already
+# true: the mirrored target exists, and both host IQNs are in its access control
+# list on the VSA. A target with an empty ACL accepts nobody, and the appliance
+# reports that only as an informational event — so from the host side the failure
+# looks like a network fault rather than a permissions one.
+
+- name: Present the SvSAN target to the cluster nodes
+  hosts: cluster
+  become: true
+  vars:
+    storage_backend: svsan
+  tasks:
+    # tasks_from runs ONLY discover.yml while still loading the role's defaults.
+    # Including the whole role would re-run the VSA build and block for five
+    # minutes waiting on management addresses the appliances do not answer on.
+    - name: Discover, log in and bind multipath
+      ansible.builtin.include_role:
+        name: storage_svsan
+        tasks_from: discover

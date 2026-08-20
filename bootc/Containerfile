@@ -1,0 +1,192 @@
+# Store node image — RHEL bootc
+#
+# ONE image serves BOTH storage options and BOTH nodes.
+#
+#   * Both storage stacks are present (DRBD kmod + iSCSI/multipath). They are
+#     small, and baking both means one image to build and keeps the
+#     "one substrate, two options" design intact — Ansible activates whichever
+#     `storage_backend` selects.
+#   * Node identity (hostname, addresses) is injected at install time and by
+#     Ansible, not baked in. The predecessor lab built node1/node2 images
+#     separately; that doubles build time for no benefit.
+#
+# Credentials never appear here. Entitlements come from the build host or a
+# build secret — see build.sh.
+
+ARG BASE=registry.redhat.io/rhel9/rhel-bootc:latest
+FROM ${BASE}
+
+# ---------------------------------------------------------------------------
+# 1. Repositories
+#
+#    On a subscribed RHEL build host, podman injects the host's entitlement and
+#    subscription-manager runs in "container mode". In that mode:
+#
+#      * every repo the entitlement covers IS visible inside the build, but all
+#        of them are DISABLED except baseos/appstream;
+#      * `subscription-manager repos --enable` is a NO-OP;
+#      * /etc/yum.repos.d/redhat.repo does not exist on disk — dnf generates it
+#        at runtime from the entitlement.
+#
+#    So extra repos are enabled per-dnf-invocation with --enablerepo, which also
+#    makes the build independent of whatever the build host happens to have
+#    enabled. See the HighAvailability step below.
+#
+#    The activation-key path is for an UNSUBSCRIBED build host, where
+#    registering inside the container does work and repos can be enabled.
+# ---------------------------------------------------------------------------
+RUN --mount=type=secret,id=rhsm-key,required=false \
+    --mount=type=secret,id=rhsm-org,required=false \
+    set -eux; \
+    if [ -s /run/secrets/rhsm-key ] 2>/dev/null; then \
+      subscription-manager register \
+        --activationkey=<YOUR-ACTIVATION-KEY> /run/secrets/rhsm-key)" \
+        --org="$(cat /run/secrets/rhsm-org)" --force; \
+      subscription-manager repos \
+        --enable=rhel-9-for-x86_64-baseos-rpms \
+        --enable=rhel-9-for-x86_64-appstream-rpms \
+        --enable=rhel-9-for-x86_64-highavailability-rpms; \
+    fi
+
+# ---------------------------------------------------------------------------
+# 2. Base tooling
+# ---------------------------------------------------------------------------
+RUN dnf -y install \
+      NetworkManager \
+      chrony firewalld \
+      lvm2 xfsprogs \
+      python3 python3-libselinux python3-libsemanage \
+      policycoreutils-python-utils \
+      openssh-server openssh-clients \
+      vim-enhanced bash-completion tar \
+      pciutils usbutils dmidecode ipmitool lsscsi \
+      nmap-ncat \
+ && dnf clean all
+
+# ---------------------------------------------------------------------------
+# 3. High availability
+#    corosync-qdevice is included so the node can join the remote qnetd arbiter.
+#    knet is the default and only supported transport on RHEL 9.
+# ---------------------------------------------------------------------------
+RUN dnf -y --enablerepo=rhel-9-for-x86_64-highavailability-rpms install \
+      pcs pacemaker corosync corosync-qdevice \
+      resource-agents fence-agents-all \
+      sbd \
+ && dnf clean all
+
+# ---------------------------------------------------------------------------
+# 4. Virtualisation
+# ---------------------------------------------------------------------------
+RUN dnf -y install \
+      qemu-kvm libvirt libvirt-daemon-kvm libvirt-client \
+      virt-install libguestfs-tools-c guestfs-tools \
+      genisoimage \
+ && dnf clean all
+
+# ---------------------------------------------------------------------------
+# 5. Option A — SvSAN client side
+#    The VSA itself is a VM deployed later; the host needs the initiator stack.
+# ---------------------------------------------------------------------------
+RUN dnf -y install \
+      iscsi-initiator-utils device-mapper-multipath sg3_utils \
+ && dnf clean all
+
+# ---------------------------------------------------------------------------
+# 6. Option B — DRBD
+#
+#    THE bootc trade-off, stated plainly: DRBD is an out-of-tree kernel module,
+#    so it is baked into the image and must be rebuilt whenever the base image's
+#    kernel moves. kmod-drbd9x is kABI-tracking (weak-modules), which carries it
+#    across minor kernel updates, but a major bump needs a matching build.
+#
+#    ELRepo is fine for a lab. Production needs LINBIT-supported packages —
+#    LINBIT supports DRBD, Red Hat supports RHEL, and the two work joint
+#    escalations. Swap this block for the LINBIT repo when that is in place.
+# ---------------------------------------------------------------------------
+RUN rpm --import https://www.elrepo.org/RPM-GPG-KEY-elrepo.org \
+ && dnf -y install https://www.elrepo.org/elrepo-release-9.el9.elrepo.noarch.rpm \
+ && dnf -y install kmod-drbd9x drbd9x-utils \
+ && dnf clean all
+
+RUN echo drbd > /etc/modules-load.d/drbd.conf
+
+#    ELRepo labels the OCF resource agent as drbd_exec_t — the label for the
+#    DRBD *daemon* — rather than bin_t, which is what every other OCF agent
+#    carries. pacemaker-execd therefore transitions the agent into the drbd_t
+#    domain, which cannot write cluster_var_log_t, and the agent dies in ~50 ms
+#    with "Permission denied" on /var/log/pacemaker/pacemaker.log.
+#
+#    The failure is invisible in pcs, which just reports a start error, and it
+#    only appears with SELinux enforcing — so it looks like a DRBD problem and
+#    is not one. Relabel the agent as the ordinary executable it is.
+RUN semanage fcontext -a -t bin_t '/usr/lib/ocf/resource\.d/linbit/drbd' 2>/dev/null || true; \
+    chcon -t bin_t /usr/lib/ocf/resource.d/linbit/drbd
+
+# ---------------------------------------------------------------------------
+# 7. Services
+#    Enabled here so a freshly installed node is reachable and time-synced
+#    before Ansible ever connects. Cluster services are deliberately NOT
+#    enabled — pcs owns starting corosync/pacemaker once the cluster is formed.
+# ---------------------------------------------------------------------------
+RUN systemctl enable sshd chronyd firewalld NetworkManager libvirtd pcsd
+
+# Load the IPMI interface so the BMC is visible for fence_redfish/fence_ipmilan.
+RUN printf 'ipmi_devintf\nipmi_si\n' > /etc/modules-load.d/ipmi.conf
+
+# ---------------------------------------------------------------------------
+# 8. Host configuration that belongs in the image
+# ---------------------------------------------------------------------------
+# Key-only root login — the playbooks connect as root.
+RUN sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config \
+ && sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication no/'  /etc/ssh/sshd_config
+
+# NetworkManager should not invent a default connection on the storage NIC.
+RUN printf '[main]\nno-auto-default=*\n' > /etc/NetworkManager/conf.d/10-no-auto-default.conf
+
+# libvirt listens for incoming live migration. This is what gives the cluster
+# vMotion-equivalent behaviour; the firewall keeps it on the replication network.
+RUN sed -i 's/^#\?listen_tls.*/listen_tls = 0/'      /etc/libvirt/libvirtd.conf \
+ && sed -i 's/^#\?listen_tcp.*/listen_tcp = 1/'      /etc/libvirt/libvirtd.conf \
+ && sed -i 's/^#\?auth_tcp.*/auth_tcp = "none"/'     /etc/libvirt/libvirtd.conf
+
+# Directories that must survive on a bootc system.
+RUN printf 'd /var/lib/libvirt/images 0711 root root -\nd /var/store-a 0755 root root -\nd /var/store-b 0755 root root -\n' \
+      > /etc/tmpfiles.d/store-platform.conf
+
+# ---------------------------------------------------------------------------
+# 8b. Serial console
+#
+#     These boxes are headless and managed through the BMC's SOL console, so the
+#     OS has to actually talk to the serial port. Three things are needed and
+#     only one of them lives here:
+#
+#       BIOS  -> "Console Redirection" must be enabled in firmware, with
+#                "redirection after POST" so it survives the handoff. Not
+#                something an image can set.
+#       kernel-> console= arguments, set below via bootc's kargs.d so they apply
+#                to every deployment and survive upgrades. Editing
+#                /etc/default/grub would NOT survive, since /etc is not the
+#                source of truth in image mode.
+#       login -> a getty on the serial line, enabled below.
+#
+#     console=tty0 first, console=ttyS0 last: the LAST one named becomes
+#     /dev/console and receives the boot messages and the login prompt, while
+#     the earlier one still gets kernel output. So a monitor and SOL both work.
+# ---------------------------------------------------------------------------
+RUN mkdir -p /usr/lib/bootc/kargs.d && \
+    printf 'kargs = ["console=tty0", "console=ttyS0,115200n8"]\n' \
+      > /usr/lib/bootc/kargs.d/10-serial-console.toml
+
+RUN systemctl enable serial-getty@ttyS0.service
+
+# ---------------------------------------------------------------------------
+# 9. Unregister so no entitlement leaks into the image
+# ---------------------------------------------------------------------------
+RUN subscription-manager unregister || true; \
+    subscription-manager clean || true; \
+    rm -rf /var/cache/* /var/lib/rhsm /etc/pki/entitlement/*
+
+LABEL org.opencontainers.image.title="store-node" \
+      org.opencontainers.image.description="RHEL bootc node for a 2-node store cluster: KVM, Pacemaker, DRBD and iSCSI"
+
+RUN bootc container lint

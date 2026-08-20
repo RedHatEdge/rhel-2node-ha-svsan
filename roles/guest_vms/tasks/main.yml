@@ -1,0 +1,133 @@
+---
+# Ubuntu guests standing in for a site's POS and Postgres VMs.
+#
+# Managed as per-VM ocf:heartbeat:VirtualDomain resources — NOT
+# systemd:libvirt-guests, which is all-or-nothing and gives Pacemaker no per-VM
+# health signal or placement control. The requirement is HA per VM.
+#
+# Each guest is provisioned ON ITS HOME NODE, because that is where its storage
+# is mounted (DRBD) or where its LUN is expected to be active (SvSAN).
+
+# Prefer a copy already on the control node. Each store node pulling 700 MB from
+# the internet is slow, and in a real store it may not have a route out at all.
+- name: Look for the cloud image on the control node
+  ansible.builtin.stat:
+    path: "{{ guest_image_local }}"
+  delegate_to: localhost
+  become: false
+  register: _img_local
+
+- name: Copy the cloud image from the control node
+  ansible.builtin.copy:
+    src: "{{ guest_image_local }}"
+    dest: /var/lib/libvirt/images/ubuntu-base.img
+    mode: "0644"
+  when: _img_local.stat.exists
+
+- name: Otherwise fetch it directly
+  ansible.builtin.get_url:
+    url: "{{ guest_image_url }}"
+    dest: /var/lib/libvirt/images/ubuntu-base.img
+    mode: "0644"
+  when: not _img_local.stat.exists
+
+- name: Install image tooling
+  ansible.builtin.dnf:
+    name:
+      - genisoimage
+      - qemu-img
+    state: present
+  failed_when: false
+  when: not is_bootc | bool
+
+# Live migration moves a guest between nodes with no downtime, and Pacemaker
+# will use it for planned maintenance if allow-migrate is set. It goes over SSH
+# between the two hosts as root — and root on each node has never seen the
+# other's host key, so libvirt fails with "Host key verification failed" and
+# Pacemaker silently falls back to stop-and-start.
+#
+# The fallback works, which is why this is easy to miss: guests move, the cluster
+# looks healthy, and a maintenance window costs 16 seconds of downtime per VM
+# instead of none. Across several thousand sites doing this monthly, that is the difference
+# between maintenance being invisible and maintenance being an outage.
+# libvirt derives its host UUID from the DMI system UUID, and the Simply NUC
+# EE-2000 ships the SAME DMI UUID in firmware on every unit — both nodes report
+# 1341a064-53b8-11ee-a665-325096b39f47. libvirt then believes the two hosts are
+# one machine and refuses to migrate: "Attempt to migrate guest to the same host".
+#
+# machine-id IS unique (the kickstart generates it), so deriving from that gives
+# each node a distinct identity without touching firmware.
+#
+# This matters well beyond the lab. On identical hardware deployed from one image
+# — which is exactly the several thousand-store model — every site would hit it, and it
+# fails SILENTLY: Pacemaker falls back to stop-and-start, the guests move, the
+# cluster reports healthy, and every maintenance window costs a cold restart per
+# VM instead of a live migration.
+- name: Give libvirt a host identity that is actually unique
+  ansible.builtin.lineinfile:
+    path: /etc/libvirt/libvirtd.conf
+    regexp: '^\s*#?\s*host_uuid_source\s*='
+    line: 'host_uuid_source = "machine-id"'
+    state: present
+  register: _hostuuid
+
+- name: Restart libvirt to adopt the new host identity
+  ansible.builtin.systemd:
+    name: libvirtd
+    state: restarted
+  when: _hostuuid.changed
+
+- name: Confirm the two nodes now differ
+  ansible.builtin.command: virsh capabilities
+  register: _caps
+  changed_when: false
+
+- name: Report host UUID
+  ansible.builtin.debug:
+    msg: "{{ inventory_hostname }} libvirt host uuid: {{ _caps.stdout | regex_search('<uuid>([^<]+)</uuid>', '\\1') | first }}"
+
+# Live migration negotiates over SSH but moves the guest's memory over a
+# separate data connection in 49152-49215. Without those open the migration
+# authenticates, starts, and then fails with "No route to host" — so it looks
+# like a network fault rather than a firewall rule.
+- name: Open the libvirt migration ports
+  ansible.posix.firewalld:
+    port: "{{ item }}"
+    permanent: true
+    immediate: true
+    state: enabled
+  loop:
+    - "49152-49215/tcp"
+    - "16509/tcp"
+  loop_control:
+    label: "{{ item }}"
+  failed_when: false
+
+- name: Trust the peer's SSH host key, for live migration
+  ansible.builtin.shell: |
+    set -o pipefail
+    mkdir -p /root/.ssh && chmod 700 /root/.ssh
+    touch /root/.ssh/known_hosts && chmod 600 /root/.ssh/known_hosts
+    changed=0
+    for peer in {{ (groups['cluster'] | difference([inventory_hostname]))
+                   | map('extract', hostvars, 'lan_ip') | list | join(' ') }}                 {{ groups['cluster'] | difference([inventory_hostname]) | join(' ') }}; do
+      ssh-keygen -F "$peer" >/dev/null 2>&1 && continue
+      ssh-keyscan -T 5 -H "$peer" >> /root/.ssh/known_hosts 2>/dev/null && changed=1
+    done
+    echo "changed=$changed"
+  args:
+    executable: /bin/bash
+  register: _hostkeys
+  changed_when: "'changed=1' in _hostkeys.stdout"
+
+- name: Provision each guest on its home node
+  ansible.builtin.include_tasks: provision.yml
+  loop: "{{ guest_vms }}"
+  loop_control:
+    loop_var: vm
+    label: "{{ vm.name }} on {{ vm.home_node }}"
+  when: inventory_hostname == vm.home_node
+
+- name: Configure Pacemaker resources
+  ansible.builtin.include_tasks: pacemaker.yml
+  run_once: true

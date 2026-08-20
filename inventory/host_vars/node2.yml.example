@@ -1,0 +1,31 @@
+---
+# node2 — REPLACE EVERY VALUE BELOW WITH YOUR OWN
+#
+# Interfaces are bound by MAC and disks by /dev/disk/by-id, never by kernel name.
+# Identical servers often enumerate NICs and NVMe devices in different orders, so
+# anything that refers to enp2s0 or nvme0n1 will eventually point at the wrong
+# device on one of them.
+#
+# Find the values on the machine itself:
+#   ip -br link                          MAC addresses
+#   ls -l /dev/disk/by-id/ | grep nvme   stable disk names
+
+node_name: node2
+node_id: 2
+
+# ── Management interface — corosync ring0, host management ─────────────────
+control_mac: "REPLACE:WITH:THIS:NODES:MGMT:MAC"
+lan_ip: 172.16.7.12                 # static address on your management network
+
+# ── Storage interface — corosync ring1, replication ────────────────────────
+repl_mac: "REPLACE:WITH:THIS:NODES:STORAGE:MAC"
+repl_ip: 172.18.8.12                # static address on your storage network
+
+# ── Data disk ──────────────────────────────────────────────────────────────
+# The disk this node contributes to storage. NOT the OS disk.
+storage_device: "/dev/disk/by-id/REPLACE-WITH-YOUR-DISK-ID"
+
+# ── BMC, used for fencing ──────────────────────────────────────────────────
+# A cluster that cannot fence will decline to recover at the worst moment, so
+# this must be reachable and it must work.
+redfish_address: "192.168.4.12"     # this node's BMC address

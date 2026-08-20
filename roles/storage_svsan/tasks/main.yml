@@ -1,0 +1,105 @@
+---
+# Host-side plumbing is fully buildable today. VSA deployment is gated on
+# obtaining the image — see tasks/vsa.yml.
+
+- name: Install iSCSI initiator and multipath
+  ansible.builtin.dnf:
+    name:
+      - iscsi-initiator-utils
+      - device-mapper-multipath
+      - lsscsi
+      - sg3_utils
+    state: present
+  when: not is_bootc | bool
+
+- name: Set the iSCSI initiator name
+  ansible.builtin.copy:
+    dest: /etc/iscsi/initiatorname.iscsi
+    content: "InitiatorName={{ iscsi_initiator_prefix }}:{{ node_name }}\n"
+    mode: "0600"
+  notify: restart iscsid
+
+# node.startup=automatic so sessions re-establish on boot without Pacemaker
+# having to manage them. Storage plumbing is host business, not cluster business.
+- name: Configure iscsid for automatic login
+  ansible.builtin.lineinfile:
+    path: /etc/iscsi/iscsid.conf
+    regexp: '^\s*node\.startup\s*='
+    line: "node.startup = automatic"
+    state: present
+  notify: restart iscsid
+
+# Failover time is DETECTION plus RECOVERY, and detection dominates.
+#
+# With the defaults a dead path takes up to noop_out_interval + noop_out_timeout
+# (5 + 5) to notice, then fast_io_fail_tmo (5) to give up on — about 15 seconds,
+# which is exactly the write stall measured when a VSA was powered off. Note the
+# live session Recovery Timeout is 5, not the 15 in replacement_timeout:
+# multipath overrides it, so tuning replacement_timeout alone changes nothing.
+#
+# These values target detection in ~4s and recovery in 3s. The cost is
+# sensitivity — a brief blip can now fail a path that would previously have
+# ridden it out. That is the right trade with multipath, because a failed path
+# is recovered automatically when it returns, whereas blocked writes are visible
+# to whoever is standing at the till.
+- name: Tune iSCSI failure detection and recovery
+  ansible.builtin.lineinfile:
+    path: /etc/iscsi/iscsid.conf
+    regexp: "^\\s*{{ item.k | regex_escape }}\\s*="
+    line: "{{ item.k }} = {{ item.v }}"
+    state: present
+  loop:
+    - { k: "node.session.timeo.replacement_timeout", v: "{{ iscsi_replacement_timeout }}" }
+    - { k: "node.conn[0].timeo.noop_out_interval",   v: "{{ iscsi_noop_interval }}" }
+    - { k: "node.conn[0].timeo.noop_out_timeout",    v: "{{ iscsi_noop_timeout }}" }
+  loop_control:
+    label: "{{ item.k }} = {{ item.v }}"
+  notify: restart iscsid
+
+- name: Enable iSCSI services
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    enabled: true
+    state: started
+  loop:
+    - iscsid
+    - iscsi
+
+# Path preference matters: each host should read from its LOCAL VSA and use
+# the peer only for redundancy. Getting this wrong sends every read across the
+# rack. Confirm the correct prio/ALUA setting with StorMagic.
+- name: Install multipath configuration
+  ansible.builtin.template:
+    src: multipath.conf.j2
+    dest: /etc/multipath.conf
+    mode: "0644"
+  notify: restart multipathd
+
+- name: Enable multipathd
+  ansible.builtin.systemd:
+    name: multipathd
+    enabled: true
+    state: started
+
+- name: Open iSCSI and SvSAN ports on the replication network
+  ansible.posix.firewalld:
+    port: "{{ item }}"
+    permanent: true
+    immediate: true
+    state: enabled
+  loop:
+    - 3260/tcp                                  # iSCSI
+    - "{{ svsan_witness_port }}/tcp"            # SvSAN discovery / witness
+    - "{{ svsan_witness_port }}/udp"
+
+- name: Deploy the VSA
+  ansible.builtin.include_tasks: vsa.yml
+
+- name: Configure Pacemaker resources
+  ansible.builtin.include_tasks: pacemaker.yml
+  run_once: true
+
+# Presenting the target to the hosts is a separate, tagged step: it can only run
+# after the mirror exists and the host IQNs are in its access control list.
+# Presentation is NOT part of the build — see playbooks/11-option-a-attach.yml.
+# It cannot run until the target exists and the host IQNs are in its ACL.

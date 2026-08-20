@@ -1,0 +1,17 @@
+---
+# Build the store's guests — one POS, one Postgres, one per host.
+#
+#   make guests BACKEND=svsan     (or BACKEND=drbd)
+#
+# Confirmed with the customer 19 Aug 2026: each host runs one Ubuntu VM, two per
+# store, in a failover configuration — so a single host must be able to carry
+# both during a failure or a maintenance window. That is why each guest is
+# provisioned on its home node but every host can see both LUNs.
+
+- name: Build the store guests
+  hosts: cluster
+  become: true
+  vars:
+    storage_backend: "{{ backend | default('svsan') }}"
+  roles:
+    - guest_vms

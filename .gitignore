@@ -1,0 +1,28 @@
+# local state — never commit
+.venv/
+collections/
+*.retry
+output/
+results/*.csv
+
+# your own values — only the .example files are tracked
+inventory/hosts.yml
+inventory/host_vars/*.yml
+inventory/group_vars/all.yml
+inventory/group_vars/vault.yml
+vault-password
+.vault_pass
+
+# credentials
+**/secrets/
+*.rhsm
+
+# images and vendor binaries — supply your own
+*.qcow2
+*.img
+*.iso
+*.tar
+lab/images/
+containers/nsh-witness/bin/
+containers/nsh-witness/lib/
+containers/nsh-witness/dirs

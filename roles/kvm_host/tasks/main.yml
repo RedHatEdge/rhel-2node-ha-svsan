@@ -1,0 +1,69 @@
+---
+- name: Install virtualisation packages
+  ansible.builtin.dnf:
+    name:
+      - qemu-kvm
+      - libvirt
+      - libvirt-daemon-kvm
+      - virt-install
+      - virt-viewer
+      - libguestfs-tools-c
+      - guestfs-tools
+    state: present
+  when: not is_bootc | bool
+
+- name: Confirm hardware virtualisation is available
+  ansible.builtin.shell: |
+    set -o pipefail
+    grep -cE '(vmx|svm)' /proc/cpuinfo
+  args:
+    executable: /bin/bash
+  register: _virt
+  changed_when: false
+  failed_when: _virt.stdout | int == 0
+
+- name: Enable and start libvirtd
+  ansible.builtin.systemd:
+    name: libvirtd
+    enabled: true
+    state: started
+
+- name: Remove the default NAT network
+  ansible.builtin.command: "virsh net-{{ item }} default"
+  loop: [destroy, undefine]
+  register: _defnet
+  changed_when: _defnet.rc == 0
+  failed_when: false
+
+# Live migration between the two nodes needs libvirt to accept incoming
+# connections. This is what gives vMotion-equivalent behaviour.
+- name: Enable libvirt TCP listener for live migration
+  ansible.builtin.lineinfile:
+    path: /etc/libvirt/libvirtd.conf
+    regexp: "^#?{{ item.k }}"
+    line: "{{ item.k }} = {{ item.v }}"
+  loop:
+    - { k: "listen_tls",  v: "0" }
+    - { k: "listen_tcp",  v: "1" }
+    - { k: "auth_tcp",    v: '"none"' }
+  notify: restart libvirtd
+
+- name: Open libvirt migration ports on the replication network
+  ansible.posix.firewalld:
+    port: "{{ item }}"
+    zone: trusted
+    permanent: true
+    immediate: true
+    state: enabled
+  loop:
+    - 16509/tcp          # libvirtd
+    - 49152-49215/tcp    # migration data
+
+- name: Create the VM image directory
+  ansible.builtin.file:
+    path: /var/lib/libvirt/images
+    state: directory
+    mode: "0711"
+
+- name: Exchange root SSH keys for migration_transport=ssh
+  ansible.builtin.include_tasks: ssh_keys.yml

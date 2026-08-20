@@ -1,0 +1,72 @@
+---
+# corosync-qdevice on the cluster nodes → the remote qnetd arbiter.
+#
+#   node1    1 vote
+#   node2    1 vote
+#   qdevice  1 vote
+#   ------------------
+#   total    3, quorum = 2
+#
+# Losing the arbiter does NOT stop the store: both nodes up = 2 of 3 = quorate.
+# Only tie-breaking for a subsequent node failure is lost.
+
+- name: Install corosync-qdevice
+  ansible.builtin.dnf:
+    name: corosync-qdevice
+    state: present
+  when: not is_bootc | bool
+
+- name: Enable qdevice service
+  ansible.builtin.systemd:
+    name: corosync-qdevice
+    enabled: true
+
+- name: Check whether a quorum device is already configured
+  ansible.builtin.command: pcs quorum config
+  register: _qconf
+  changed_when: false
+  run_once: true
+  delegate_to: "{{ node1_name }}"
+
+- name: Authenticate the cluster to the qnetd host
+  ansible.builtin.command: >
+    pcs host auth {{ qnetd_host }} -u hacluster -p {{ hacluster_password }}
+  run_once: true
+  delegate_to: "{{ node1_name }}"
+  when: "'Device' not in _qconf.stdout"
+  changed_when: true
+  no_log: true
+
+- name: Add the quorum device
+  ansible.builtin.command: >
+    pcs quorum device add model net
+    host={{ qnetd_host }}
+    algorithm={{ qdevice_algorithm }}
+  run_once: true
+  delegate_to: "{{ node1_name }}"
+  when: "'Device' not in _qconf.stdout"
+  changed_when: true
+
+# two_node and a quorum device are mutually exclusive. pcs removes two_node
+# automatically when the device is added — verify rather than assume.
+- name: Assert two_node is not set alongside the quorum device
+  ansible.builtin.command: grep -c 'two_node' /etc/corosync/corosync.conf
+  register: _twonode
+  changed_when: false
+  failed_when: _twonode.stdout | int > 0
+
+- name: Wait for the qdevice vote to register
+  ansible.builtin.command: pcs quorum status
+  register: _qstatus
+  until: "'Qdevice' in _qstatus.stdout and 'A,V,NMW' in _qstatus.stdout"
+  retries: 12
+  delay: 5
+  run_once: true
+  delegate_to: "{{ node1_name }}"
+  changed_when: false
+  failed_when: false
+
+- name: Show quorum status
+  ansible.builtin.debug:
+    var: _qstatus.stdout_lines
+  run_once: true

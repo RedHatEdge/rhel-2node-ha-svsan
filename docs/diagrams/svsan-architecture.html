@@ -1,0 +1,346 @@
+<title>SvSAN on RHEL KVM</title>
+<style>
+  :root{
+    --page:#ffffff; --surface:#fafafa; --surface2:#f0f0f0;
+    --border:#d2d2d2; --border-soft:#ebebeb;
+    --text:#151515; --text2:#4d4d4d; --text3:#6a6e73;
+    --rh-red:#ee0000; --rh-red-dk:#a30000;
+    --pf-blue:#0066cc; --pf-blue-dk:#004b95;
+    --pf-gold:#f0ab00; --pf-gold-dk:#795600;
+    --pf-purple:#5752d1; --pf-purple-dk:#3c3d99;
+    --display:"Red Hat Display","Red Hat Text",system-ui,sans-serif;
+    --body:"Red Hat Text",system-ui,-apple-system,sans-serif;
+    --mono:"Red Hat Mono",ui-monospace,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--page); color:var(--text);
+    font-family:var(--body); font-size:16px; line-height:1.6;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1300px;margin:0 auto;padding:0 32px 96px}
+
+  header{border-top:4px solid var(--rh-red);padding:34px 0 26px;margin-bottom:40px;border-bottom:1px solid var(--border)}
+  .eyebrow{
+    font-family:var(--mono); font-size:12px; letter-spacing:.08em;
+    text-transform:uppercase; color:var(--text3); margin:0 0 12px;
+  }
+  h1{
+    font-family:var(--display); font-weight:500; font-size:clamp(30px,4.2vw,44px);
+    line-height:1.14; margin:0 0 14px; letter-spacing:-.02em; text-wrap:balance;
+  }
+  .lede{margin:0;color:var(--text2);font-size:18px;max-width:64ch;font-weight:300}
+
+  h2{
+    font-family:var(--display); font-weight:500; font-size:26px;
+    margin:60px 0 4px; letter-spacing:-.01em; text-wrap:balance;
+  }
+  h2 + .sub{
+    margin:0 0 22px; color:var(--text3);
+    font-family:var(--mono); font-size:12px; letter-spacing:.05em;
+  }
+  p{margin:0 0 16px}
+  strong{font-weight:600}
+  code{font-family:var(--mono);font-size:.88em;color:var(--pf-blue-dk);background:var(--surface2);padding:1px 5px;border-radius:3px}
+
+  figure{margin:0 0 10px}
+  .figwrap{
+    background:var(--page); border:1px solid var(--border);
+    border-radius:3px; padding:20px; overflow-x:auto;
+  }
+  .figwrap svg{display:block;min-width:960px;width:100%;height:auto}
+  figcaption{margin-top:14px;color:var(--text2);font-size:14px;max-width:80ch;line-height:1.62}
+
+  .notes{display:grid;grid-template-columns:repeat(auto-fit,minmax(258px,1fr));gap:0;margin-top:16px}
+  .note{padding:20px 30px 20px 0;border-top:2px solid var(--border-soft)}
+  .note.rhel{border-top-color:var(--rh-red)}
+  .note.svsan{border-top-color:var(--pf-gold)}
+  .note.mirror{border-top-color:var(--pf-blue)}
+  .note.witness{border-top-color:var(--pf-purple)}
+  .note .k{
+    font-family:var(--mono);font-size:11px;letter-spacing:.09em;text-transform:uppercase;
+    color:var(--text3);margin:0 0 8px;font-weight:500
+  }
+  .note p{font-size:14.5px;color:var(--text2);margin:0}
+
+  table{border-collapse:collapse;width:100%;font-size:14px;margin:6px 0 0}
+  th,td{text-align:left;padding:10px 18px 10px 0;border-bottom:1px solid var(--border-soft);vertical-align:top}
+  th{
+    font-family:var(--mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;
+    color:var(--text3);font-weight:500;border-bottom:1px solid var(--border)
+  }
+  td.m{font-family:var(--mono);font-size:13px;color:var(--text);font-variant-numeric:tabular-nums}
+  td.m .a{color:var(--pf-blue-dk)}
+  .tablewrap{overflow-x:auto}
+
+  .legend{display:flex;flex-wrap:wrap;gap:18px 30px;margin:22px 0 0;padding:0;list-style:none}
+  .legend li{display:flex;align-items:center;gap:9px;font-size:13px;color:var(--text2);font-family:var(--mono)}
+  .sw{width:22px;height:3px;flex:none}
+  .sw.d{height:0;border-top:3px dashed currentColor;width:24px}
+
+  .opts{
+    margin:26px 0 0; padding:0; display:grid;
+    grid-template-columns:max-content 1fr; gap:10px 20px; align-items:baseline;
+    max-width:82ch;
+  }
+  .opts dt{
+    font-family:var(--mono); font-size:12px; letter-spacing:.05em;
+    text-transform:uppercase; color:var(--text3); font-weight:500;
+    border-left:3px solid var(--rh-red); padding-left:10px;
+  }
+  .opts dd{margin:0;font-size:14.5px;color:var(--text2)}
+
+  footer{margin-top:64px;padding-top:22px;border-top:1px solid var(--border);color:var(--text3);font-size:13px}
+</style>
+
+<div class="wrap">
+
+<header>
+  <p class="eyebrow">Two-node store platform · Option A — StorMagic SvSAN</p>
+  <h1>SvSAN on RHEL KVM</h1>
+  <p class="lede">Two RHEL 9 hosts, LVM-backed storage, a StorMagic virtual storage appliance on each, and a witness that is nothing more than a container on a third RHEL box.</p>
+  <dl class="opts">
+    <dt>Option A</dt><dd>StorMagic SvSAN — the storage layer these stores already run under ESXi today, kept as-is and moved onto RHEL KVM. <strong>This diagram.</strong></dd>
+    <dt>Option B</dt><dd>DRBD — the RHEL-native alternative, fully supported, replicating block devices directly between the two hosts with no appliance in the path.</dd>
+  </dl>
+</header>
+
+<figure>
+  <div class="figwrap">
+  <svg viewBox="0 0 1240 880" role="img" aria-label="Two RHEL 9 hosts each running a StorMagic VSA on LVM-backed storage, mirroring synchronously over a storage VLAN, with a witness container on a third RHEL host arbitrating quorum.">
+    <defs>
+      <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="context-stroke"/>
+      </marker>
+    </defs>
+
+    <!-- witness, in the datacenter -->
+    <rect x="440" y="16" width="360" height="128" rx="3" fill="#ffffff" stroke="#5752d1" stroke-width="1.5"/>
+    <text x="458" y="40" font-family="Red Hat Mono, monospace" font-size="11" fill="#3c3d99" letter-spacing="0.8">DATACENTER · RHEL 9 ARBITER</text>
+    <text x="458" y="60" font-family="Red Hat Mono, monospace" font-size="12.5" fill="#4d4d4d">qnetd1 · 172.16.7.20</text>
+    <rect x="458" y="74" width="324" height="54" rx="2" fill="#fafafa" stroke="#d2d2d2"/>
+    <text x="472" y="93" font-family="Red Hat Mono, monospace" font-size="12.5" fill="#151515">podman · nsh-witness</text>
+    <text x="472" y="109" font-family="Red Hat Mono, monospace" font-size="10.5" fill="#4d4d4d">ubi9-minimal · smclusterd + smdiscod · :4174</text>
+    <text x="472" y="122" font-family="Red Hat Mono, monospace" font-size="9.5" fill="#6a6e73">systemd quadlet · corosync-qnetd :5403 alongside</text>
+
+    <path d="M470,144 L300,236" stroke="#5752d1" stroke-width="1.4" stroke-dasharray="5 4" fill="none" marker-end="url(#ar)"/>
+    <path d="M770,144 L940,236" stroke="#5752d1" stroke-width="1.4" stroke-dasharray="5 4" fill="none" marker-end="url(#ar)"/>
+    <text x="332" y="196" font-family="Red Hat Mono, monospace" font-size="10.5" fill="#3c3d99" text-anchor="end">mirror quorum</text>
+    <text x="910" y="196" font-family="Red Hat Mono, monospace" font-size="10.5" fill="#3c3d99">mirror quorum</text>
+
+    <!-- host boundaries -->
+    <rect x="34" y="230" width="500" height="600" rx="3" fill="#fafafa" stroke="#ee0000" stroke-width="1.6"/>
+    <text x="52" y="257" font-family="Red Hat Display, sans-serif" font-size="13" font-weight="500" fill="#a30000" letter-spacing="0.5">RHEL 9.8 HOST · node1</text>
+    <text x="52" y="274" font-family="Red Hat Mono, monospace" font-size="10.5" fill="#6a6e73">Simply NUC EE-2000 · 172.16.7.10</text>
+
+    <rect x="706" y="230" width="500" height="600" rx="3" fill="#fafafa" stroke="#ee0000" stroke-width="1.6"/>
+    <text x="724" y="257" font-family="Red Hat Display, sans-serif" font-size="13" font-weight="500" fill="#a30000" letter-spacing="0.5">RHEL 9.8 HOST · node2</text>
+    <text x="724" y="274" font-family="Red Hat Mono, monospace" font-size="10.5" fill="#6a6e73">Simply NUC EE-2000 · 172.16.7.11</text>
+
+    <!-- VSA guests -->
+    <rect x="56" y="292" width="456" height="128" rx="3" fill="#ffffff" stroke="#f0ab00" stroke-width="1.6"/>
+    <text x="72" y="315" font-family="Red Hat Display, sans-serif" font-size="13" font-weight="500" fill="#795600">VSA guest · svsan-node1 “vsa1”</text>
+    <text x="72" y="334" font-family="Red Hat Mono, monospace" font-size="10.5" fill="#4d4d4d">mgmt MAC 52:54:00:53:01:01 → serial 525400530101</text>
+    <rect x="72" y="346" width="200" height="30" rx="2" fill="#fafafa" stroke="#d2d2d2"/>
+    <text x="84" y="366" font-family="Red Hat Mono, monospace" font-size="10.5" fill="#151515">journal · vdb 20 GB</text>
+    <rect x="284" y="346" width="212" height="30" rx="2" fill="#fafafa" stroke="#d2d2d2"/>
+    <text x="296" y="366" font-family="Red Hat Mono, monospace" font-size="10.5" fill="#151515">pool1 · vdc 90 GB</text>
+    <text x="72" y="399" font-family="Red Hat Mono, monospace" font-size="10.5" fill="#004b95">iSCSI target :3260 → 172.18.8.20</text>
+    <text x="72" y="412" font-family="Red Hat Mono, monospace" font-size="9.5" fill="#6a6e73">all disks virtio · appliance reports “KVM:virtio4”</text>
+
+    <rect x="728" y="292" width="456" height="128" rx="3" fill="#ffffff" stroke="#f0ab00" stroke-width="1.6"/>
+    <text x="744" y="315" font-family="Red Hat Display, sans-serif" font-size="13" font-weight="500" fill="#795600">VSA guest · svsan-node2 “vsa2”</text>
+    <text x="744" y="334" font-family="Red Hat Mono, monospace" font-size="10.5" fill="#4d4d4d">mgmt MAC 52:54:00:53:02:01 → serial 525400530201</text>
+    <rect x="744" y="346" width="200" height="30" rx="2" fill="#fafafa" stroke="#d2d2d2"/>
+    <text x="756" y="366" font-family="Red Hat Mono, monospace" font-size="10.5" fill="#151515">journal · vdb 20 GB</text>
+    <rect x="956" y="346" width="212" height="30" rx="2" fill="#fafafa" stroke="#d2d2d2"/>
+    <text x="968" y="366" font-family="Red Hat Mono, monospace" font-size="10.5" fill="#151515">pool1 · vdc 90 GB</text>
+    <text x="744" y="399" font-family="Red Hat Mono, monospace" font-size="10.5" fill="#004b95">iSCSI target :3260 → 172.18.8.21</text>
+    <text x="744" y="412" font-family="Red Hat Mono, monospace" font-size="9.5" fill="#6a6e73">all disks virtio · appliance reports “KVM:virtio4”</text>
+
+    <!-- synchronous mirror -->
+    <path d="M512,356 L728,356" stroke="#0066cc" stroke-width="2.4" fill="none" marker-end="url(#ar)" marker-start="url(#ar)"/>
+    <rect x="534" y="316" width="172" height="34" rx="2" fill="#ffffff" stroke="#0066cc" stroke-width="1"/>
+    <text x="620" y="332" font-family="Red Hat Mono, monospace" font-size="11" fill="#004b95" text-anchor="middle">synchronous mirror</text>
+    <text x="620" y="345" font-family="Red Hat Mono, monospace" font-size="9" fill="#6a6e73" text-anchor="middle">write acked after both plexes</text>
+
+    <!-- libvirt -->
+    <rect x="56" y="436" width="456" height="34" rx="2" fill="#f0f0f0" stroke="#d2d2d2"/>
+    <text x="72" y="458" font-family="Red Hat Mono, monospace" font-size="10.5" fill="#4d4d4d">libvirt / KVM — domain XML with MAC + PCI slots pinned</text>
+    <rect x="728" y="436" width="456" height="34" rx="2" fill="#f0f0f0" stroke="#d2d2d2"/>
+    <text x="744" y="458" font-family="Red Hat Mono, monospace" font-size="10.5" fill="#4d4d4d">libvirt / KVM — domain XML with MAC + PCI slots pinned</text>
+
+    <!-- LVM -->
+    <rect x="56" y="486" width="456" height="118" rx="3" fill="#ffffff" stroke="#d2d2d2" stroke-width="1.4"/>
+    <text x="72" y="508" font-family="Red Hat Display, sans-serif" font-size="12.5" font-weight="500" fill="#151515">LVM volume group · vgstore · 953.87 GB</text>
+    <rect x="72" y="520" width="132" height="40" rx="2" fill="#fafafa" stroke="#d2d2d2"/>
+    <text x="82" y="537" font-family="Red Hat Mono, monospace" font-size="10" fill="#4d4d4d">lv-store-a</text>
+    <text x="82" y="551" font-family="Red Hat Mono, monospace" font-size="9.5" fill="#6a6e73">429 G · DRBD</text>
+    <rect x="212" y="520" width="132" height="40" rx="2" fill="#fafafa" stroke="#d2d2d2"/>
+    <text x="222" y="537" font-family="Red Hat Mono, monospace" font-size="10" fill="#4d4d4d">lv-store-b</text>
+    <text x="222" y="551" font-family="Red Hat Mono, monospace" font-size="9.5" fill="#6a6e73">429 G · DRBD</text>
+    <rect x="352" y="520" width="144" height="40" rx="2" fill="#fdf7e7" stroke="#f0ab00" stroke-width="1.4"/>
+    <text x="362" y="537" font-family="Red Hat Mono, monospace" font-size="10" fill="#795600">lv-svsan-pool</text>
+    <text x="362" y="551" font-family="Red Hat Mono, monospace" font-size="9.5" fill="#795600">90 G · SvSAN</text>
+    <text x="72" y="584" font-family="Red Hat Mono, monospace" font-size="9.5" fill="#6a6e73">SvSAN (option A) and DRBD (option B) hold separate volumes — both stacks coexist</text>
+
+    <rect x="728" y="486" width="456" height="118" rx="3" fill="#ffffff" stroke="#d2d2d2" stroke-width="1.4"/>
+    <text x="744" y="508" font-family="Red Hat Display, sans-serif" font-size="12.5" font-weight="500" fill="#151515">LVM volume group · vgstore · 953.87 GB</text>
+    <rect x="744" y="520" width="132" height="40" rx="2" fill="#fafafa" stroke="#d2d2d2"/>
+    <text x="754" y="537" font-family="Red Hat Mono, monospace" font-size="10" fill="#4d4d4d">lv-store-a</text>
+    <text x="754" y="551" font-family="Red Hat Mono, monospace" font-size="9.5" fill="#6a6e73">429 G · DRBD</text>
+    <rect x="884" y="520" width="132" height="40" rx="2" fill="#fafafa" stroke="#d2d2d2"/>
+    <text x="894" y="537" font-family="Red Hat Mono, monospace" font-size="10" fill="#4d4d4d">lv-store-b</text>
+    <text x="894" y="551" font-family="Red Hat Mono, monospace" font-size="9.5" fill="#6a6e73">429 G · DRBD</text>
+    <rect x="1024" y="520" width="144" height="40" rx="2" fill="#fdf7e7" stroke="#f0ab00" stroke-width="1.4"/>
+    <text x="1034" y="537" font-family="Red Hat Mono, monospace" font-size="10" fill="#795600">lv-svsan-pool</text>
+    <text x="1034" y="551" font-family="Red Hat Mono, monospace" font-size="9.5" fill="#795600">90 G · SvSAN</text>
+    <text x="744" y="584" font-family="Red Hat Mono, monospace" font-size="9.5" fill="#6a6e73">SvSAN (option A) and DRBD (option B) hold separate volumes — both stacks coexist</text>
+
+    <!-- raw block passthrough -->
+    <path d="M424,520 L424,378" stroke="#f0ab00" stroke-width="1.6" fill="none" marker-end="url(#ar)" stroke-dasharray="4 3"/>
+    <text x="434" y="502" font-family="Red Hat Mono, monospace" font-size="9.5" fill="#795600">raw block</text>
+    <path d="M1096,520 L1096,378" stroke="#f0ab00" stroke-width="1.6" fill="none" marker-end="url(#ar)" stroke-dasharray="4 3"/>
+    <text x="1106" y="502" font-family="Red Hat Mono, monospace" font-size="9.5" fill="#795600">raw block</text>
+
+    <!-- NVMe -->
+    <rect x="56" y="620" width="456" height="30" rx="2" fill="#f0f0f0" stroke="#d2d2d2"/>
+    <text x="72" y="640" font-family="Red Hat Mono, monospace" font-size="10.5" fill="#4d4d4d">NVMe 953 GB (by-id) — physical volume</text>
+    <rect x="728" y="620" width="456" height="30" rx="2" fill="#f0f0f0" stroke="#d2d2d2"/>
+    <text x="744" y="640" font-family="Red Hat Mono, monospace" font-size="10.5" fill="#4d4d4d">NVMe 953 GB (by-id) — physical volume</text>
+
+    <!-- host initiator -->
+    <text x="52" y="668" font-family="Red Hat Mono, monospace" font-size="9.5" fill="#004b95">iSCSI to its own VSA</text>
+    <rect x="56" y="674" width="456" height="60" rx="3" fill="#ffffff" stroke="#0066cc" stroke-width="1.4"/>
+    <text x="72" y="695" font-family="Red Hat Display, sans-serif" font-size="12.5" font-weight="500" fill="#004b95">host iSCSI initiator · iscsid + multipathd</text>
+    <text x="72" y="712" font-family="Red Hat Mono, monospace" font-size="9.5" fill="#4d4d4d">logs in to its OWN VSA and to the peer — guests run on the mirrored LUN</text>
+    <text x="72" y="726" font-family="Red Hat Mono, monospace" font-size="9.5" fill="#6a6e73">iqn.2026-01.com.example.lab:node1</text>
+
+    <text x="1188" y="668" font-family="Red Hat Mono, monospace" font-size="9.5" fill="#004b95" text-anchor="end">iSCSI to its own VSA</text>
+    <rect x="728" y="674" width="456" height="60" rx="3" fill="#ffffff" stroke="#0066cc" stroke-width="1.4"/>
+    <text x="744" y="695" font-family="Red Hat Display, sans-serif" font-size="12.5" font-weight="500" fill="#004b95">host iSCSI initiator · iscsid + multipathd</text>
+    <text x="744" y="712" font-family="Red Hat Mono, monospace" font-size="9.5" fill="#4d4d4d">logs in to its OWN VSA and to the peer — guests run on the mirrored LUN</text>
+    <text x="744" y="726" font-family="Red Hat Mono, monospace" font-size="9.5" fill="#6a6e73">iqn.2026-01.com.example.lab:node2</text>
+
+    <path d="M70,420 L46,420 L46,700 L56,700" stroke="#0066cc" stroke-width="1.6" fill="none" marker-end="url(#ar)"/>
+    <path d="M1170,420 L1194,420 L1194,700 L1184,700" stroke="#0066cc" stroke-width="1.6" fill="none" marker-end="url(#ar)"/>
+
+    <!-- bridges -->
+    <rect x="56" y="752" width="222" height="56" rx="2" fill="#ffffff" stroke="#d2d2d2"/>
+    <text x="68" y="772" font-family="Red Hat Mono, monospace" font-size="10.5" fill="#151515">br-lan · 172.16.7.10</text>
+    <text x="68" y="787" font-family="Red Hat Mono, monospace" font-size="9.5" fill="#6a6e73">VLAN 12 · management</text>
+    <text x="68" y="800" font-family="Red Hat Mono, monospace" font-size="9.5" fill="#6a6e73">corosync ring0 · mirror: Failover</text>
+
+    <rect x="290" y="752" width="222" height="56" rx="2" fill="#ffffff" stroke="#0066cc"/>
+    <text x="302" y="772" font-family="Red Hat Mono, monospace" font-size="10.5" fill="#004b95">br-repl · 172.18.8.10</text>
+    <text x="302" y="787" font-family="Red Hat Mono, monospace" font-size="9.5" fill="#6a6e73">VLAN 18 · storage / mirror</text>
+    <text x="302" y="800" font-family="Red Hat Mono, monospace" font-size="9.5" fill="#0066cc">corosync ring1 · mirror: Preferred</text>
+
+    <rect x="728" y="752" width="222" height="56" rx="2" fill="#ffffff" stroke="#d2d2d2"/>
+    <text x="740" y="772" font-family="Red Hat Mono, monospace" font-size="10.5" fill="#151515">br-lan · 172.16.7.11</text>
+    <text x="740" y="787" font-family="Red Hat Mono, monospace" font-size="9.5" fill="#6a6e73">VLAN 12 · management</text>
+    <text x="740" y="800" font-family="Red Hat Mono, monospace" font-size="9.5" fill="#6a6e73">corosync ring0 · mirror: Failover</text>
+
+    <rect x="962" y="752" width="222" height="56" rx="2" fill="#ffffff" stroke="#0066cc"/>
+    <text x="974" y="772" font-family="Red Hat Mono, monospace" font-size="10.5" fill="#004b95">br-repl · 172.18.8.11</text>
+    <text x="974" y="787" font-family="Red Hat Mono, monospace" font-size="9.5" fill="#6a6e73">VLAN 18 · storage / mirror</text>
+    <text x="974" y="800" font-family="Red Hat Mono, monospace" font-size="9.5" fill="#0066cc">corosync ring1 · mirror: Preferred</text>
+
+    <path d="M512,780 L728,780" stroke="#0066cc" stroke-width="1.6" fill="none" stroke-dasharray="3 4"/>
+    <text x="620" y="774" font-family="Red Hat Mono, monospace" font-size="9.5" fill="#6a6e73" text-anchor="middle">172.18.8.0/24</text>
+  </svg>
+  </div>
+  <figcaption>The full store stack. Storage rises from a single NVMe through one LVM volume group, which is carved so that the DRBD option and the SvSAN option hold separate volumes and can run side by side. Each host passes <code>lv-svsan-pool</code> into its VSA as a raw block device; the two VSAs mirror synchronously across the storage VLAN; and each host then logs back in over iSCSI to the appliance running on top of it.</figcaption>
+</figure>
+
+<div class="notes">
+  <div class="note rhel">
+    <p class="k">The host is its own client</p>
+    <p>Each RHEL host runs an iSCSI initiator against a VSA hosted on itself. That single fact forces the storage NIC to be a real bridge: a macvtap guest can reach every host except the one it runs on, so the local path would silently never form.</p>
+  </div>
+  <div class="note svsan">
+    <p class="k">Identity is a MAC</p>
+    <p>The appliance derives its licence serial from the MAC of its first interface. Pin it in the domain XML and a rebuilt VSA re-activates against the same key with no clock reset; leave it generated and every rebuild re-licenses.</p>
+  </div>
+  <div class="note mirror">
+    <p class="k">Two rings, one job each</p>
+    <p>Management on VLAN 12, mirror and iSCSI on VLAN 18. Untick iSCSI on the management interface or replication drifts onto the store LAN — SvSAN will happily use any enabled path.</p>
+  </div>
+  <div class="note mirror">
+    <p class="k">Preferred, not exclusive</p>
+    <p>Both interfaces carry iSCSI so the mirror keeps a second path — removing it would drop the redundancy StorMagic's own split-brain guidance calls for. Placement is expressed by <code>Preferred</code> / <code>Failover</code>. Measured caveat: when the storage link was pulled, the fallback carried the mirror <em>relationship</em> but not its <em>data</em> — the remote plex went stale and resynced on restore.</p>
+  </div>
+  <div class="note witness">
+    <p class="k">A container, not an appliance</p>
+    <p>The witness is StorMagic's own <code>smclusterd</code> and <code>smdiscod</code> on UBI9, run by a systemd quadlet. It sits on the same arbiter as <code>corosync-qnetd</code> so both quorum systems share a failure domain and partition identically.</p>
+  </div>
+</div>
+
+<h2>Why the witness exists</h2>
+<p class="sub">Two plexes cannot break a tie between themselves</p>
+
+<figure>
+  <div class="figwrap">
+  <svg viewBox="0 0 940 300" role="img" aria-label="Without a witness, a link failure leaves both plexes online and diverging. With a witness, only the side holding two of three votes stays online.">
+    <text x="20" y="26" font-family="Red Hat Display, sans-serif" font-size="12.5" font-weight="500" fill="#a30000" letter-spacing="0.5">WITHOUT WITNESS — ISOLATION POLICY “UP”</text>
+    <rect x="20" y="46" width="150" height="62" rx="3" fill="#ffffff" stroke="#f0ab00" stroke-width="1.5"/>
+    <text x="95" y="72" font-family="Red Hat Mono, monospace" font-size="12" fill="#795600" text-anchor="middle">vsa1</text>
+    <text x="95" y="90" font-family="Red Hat Mono, monospace" font-size="10" fill="#a30000" text-anchor="middle">stays online</text>
+    <rect x="250" y="46" width="150" height="62" rx="3" fill="#ffffff" stroke="#f0ab00" stroke-width="1.5"/>
+    <text x="325" y="72" font-family="Red Hat Mono, monospace" font-size="12" fill="#795600" text-anchor="middle">vsa2</text>
+    <text x="325" y="90" font-family="Red Hat Mono, monospace" font-size="10" fill="#a30000" text-anchor="middle">stays online</text>
+    <path d="M175,77 L245,77" stroke="#ee0000" stroke-width="2" stroke-dasharray="4 4"/>
+    <path d="M200,62 L220,92 M220,62 L200,92" stroke="#ee0000" stroke-width="2.4"/>
+    <text x="210" y="132" font-family="Red Hat Mono, monospace" font-size="10.5" fill="#a30000" text-anchor="middle">both writable · data diverges · split brain</text>
+
+    <text x="520" y="26" font-family="Red Hat Display, sans-serif" font-size="12.5" font-weight="500" fill="#004b95" letter-spacing="0.5">WITH WITNESS — ISOLATION POLICY “MAJORITY”</text>
+    <rect x="520" y="46" width="150" height="62" rx="3" fill="#ffffff" stroke="#f0ab00" stroke-width="1.5"/>
+    <text x="595" y="72" font-family="Red Hat Mono, monospace" font-size="12" fill="#795600" text-anchor="middle">vsa1</text>
+    <text x="595" y="90" font-family="Red Hat Mono, monospace" font-size="10" fill="#004b95" text-anchor="middle">2 of 3 · online</text>
+    <rect x="750" y="46" width="150" height="62" rx="3" fill="#f0f0f0" stroke="#d2d2d2" stroke-width="1.5"/>
+    <text x="825" y="72" font-family="Red Hat Mono, monospace" font-size="12" fill="#6a6e73" text-anchor="middle">vsa2</text>
+    <text x="825" y="90" font-family="Red Hat Mono, monospace" font-size="10" fill="#6a6e73" text-anchor="middle">1 of 3 · offline</text>
+    <path d="M675,77 L745,77" stroke="#ee0000" stroke-width="2" stroke-dasharray="4 4"/>
+    <path d="M700,62 L720,92 M720,62 L700,92" stroke="#ee0000" stroke-width="2.4"/>
+
+    <rect x="635" y="176" width="170" height="58" rx="3" fill="#ffffff" stroke="#5752d1" stroke-width="1.5"/>
+    <text x="720" y="199" font-family="Red Hat Mono, monospace" font-size="11" fill="#3c3d99" text-anchor="middle">nsh-witness</text>
+    <text x="720" y="216" font-family="Red Hat Mono, monospace" font-size="9.5" fill="#6a6e73" text-anchor="middle">container · qnetd1 · :4174</text>
+    <path d="M645,176 L600,112" stroke="#5752d1" stroke-width="1.4" stroke-dasharray="5 4" fill="none"/>
+    <path d="M795,176 L830,112" stroke="#5752d1" stroke-width="1.4" stroke-dasharray="5 4" fill="none" opacity="0.3"/>
+    <text x="720" y="262" font-family="Red Hat Mono, monospace" font-size="10.5" fill="#004b95" text-anchor="middle">one side keeps quorum · the other takes itself offline</text>
+  </svg>
+  </div>
+  <figcaption>Under <code>Up</code>, a plex stays online whenever it is healthy — so a broken link leaves both sides writable and the data diverges. <code>Majority</code> requires two of three, and the third vote is the witness. SvSAN refuses to create a <code>Majority</code> mirror until a witness exists, which is why the container is a hard requirement rather than a refinement.</figcaption>
+</figure>
+
+<h2>Addressing</h2>
+<p class="sub">As built · 19 August 2026</p>
+
+<div class="tablewrap">
+<table>
+  <thead>
+    <tr><th>Component</th><th>Management · VLAN 12</th><th>Storage · VLAN 18</th><th>Identity</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>node1 · RHEL host</td><td class="m">172.16.7.10</td><td class="m"><span class="a">172.18.8.10</span></td><td class="m">—</td></tr>
+    <tr><td>vsa1 · VSA guest</td><td class="m">172.16.7.89</td><td class="m"><span class="a">172.18.8.20</span></td><td class="m">525400530101</td></tr>
+    <tr><td>node2 · RHEL host</td><td class="m">172.16.7.11</td><td class="m"><span class="a">172.18.8.11</span></td><td class="m">—</td></tr>
+    <tr><td>vsa2 · VSA guest</td><td class="m">172.16.7.123</td><td class="m"><span class="a">172.18.8.21</span></td><td class="m">525400530201</td></tr>
+    <tr><td>qnetd1 · arbiter</td><td class="m">172.16.7.20</td><td class="m">—</td><td class="m">5254000A0B14</td></tr>
+  </tbody>
+</table>
+</div>
+
+<ul class="legend">
+  <li><span class="sw" style="background:#ee0000"></span>RHEL host boundary</li>
+  <li><span class="sw" style="background:#f0ab00"></span>StorMagic appliance</li>
+  <li><span class="sw" style="background:#0066cc"></span>storage / mirror path</li>
+  <li><span class="sw d" style="color:#5752d1"></span>quorum</li>
+</ul>
+
+<footer>
+  Option A · SvSAN 6.7.GA.54690 on RHEL 9.8, evaluation licences, unmodified appliance. Not a StorMagic-supported configuration: KVM was withdrawn as a hypervisor in SvSAN 6.7.
+</footer>
+
+</div>

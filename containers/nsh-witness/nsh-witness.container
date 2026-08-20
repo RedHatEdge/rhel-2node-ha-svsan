@@ -1,0 +1,36 @@
+# Podman Quadlet — systemd runs the witness directly, no wrapper scripts.
+# Drop in /etc/containers/systemd/ then: systemctl daemon-reload && systemctl start nsh-witness
+[Unit]
+Description=StorMagic SvSAN Neutral Storage Host (mirror witness)
+Documentation=https://github.com/your-org/2node-store-platform
+# The witness and corosync-qnetd deliberately share a host so the two quorum
+# systems partition identically. Neither depends on the other.
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+ContainerName=nsh-witness
+Image=localhost/nsh-witness:6.7.0.3
+
+# Host networking. The discovery daemon uses multicast, which does not survive
+# NAT, and VSAs address the witness by the host's own IP. Bridged networking
+# would work only if discovery were disabled and 4174 published explicitly.
+Network=host
+
+# Mirror state must outlive the container: it records which plex was last known
+# good. Lose it and the witness has no opinion after a restart, which is exactly
+# when its opinion matters.
+Volume=nsh-state:/var/state
+Volume=nsh-persist:/opt/stormagic/SvSAN/persist
+
+Environment=NSH_DISCOVERY=true
+
+# It arbitrates quorum — it should never be the thing that is short of memory.
+Memory=512M
+
+[Service]
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

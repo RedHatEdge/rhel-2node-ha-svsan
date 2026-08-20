@@ -1,0 +1,146 @@
+---
+# Option A — StorMagic SvSAN.
+#
+# Each node runs a VSA (a VM) that takes raw local disk and re-presents it as
+# iSCSI. The two VSAs mirror active/active; writes are acked only after both
+# copies exist. Both hosts see the mirrored LUNs, which is what makes live
+# migration native.
+#
+# Design decisions encoded here:
+#   * The VSA runs under libvirt autostart, OUTSIDE Pacemaker control.
+#     Pacemaker managing the provider of its own storage is circular and
+#     creates shutdown-ordering hazards.
+#   * ONE mirrored LUN per guest VM, consumed raw. No host filesystem means
+#     nothing to lock — this removes the "what replaces VMFS?" problem rather
+#     than solving it. No lvmlockd, no DLM, no GFS2, no Resilient Storage.
+
+# Drop the VSA image here once obtained from StorMagic.
+svsan_vsa_image: /var/lib/libvirt/images/svsan-vsa.qcow2
+svsan_vsa_name: svsan-vsa
+svsan_vsa_memory_mb: 4096
+svsan_vsa_vcpus: 2
+
+# VSA MANAGEMENT addresses, on the store LAN — not the storage network. The
+# appliance's own web UI and API live here, and the witness is reached from here.
+#
+# These are the INTENDED addresses. The appliance configures its own interfaces,
+# so the play cannot set them; it waits on them and, if they do not answer, tells
+# the operator to read the DHCP address off the console. Set them statically in
+# the appliance to match, exactly as the hosts are statically addressed.
+svsan_vsa_ip:
+  node1: 172.16.7.30
+  node2: 172.16.7.31
+
+# Witness / Neutral Storage Host — arbitrates MIRROR ownership.
+# Distinct from corosync-qnetd, which arbitrates CLUSTER membership. Both run
+# on the same RHEL arbiter box so the two quorum systems share a failure domain
+# and partition identically; see roles/svsan_witness.
+svsan_witness_host: "{{ qnetd_host }}"
+svsan_witness_port: 4174
+
+# One mirrored target per guest VM.
+svsan_targets:
+  - name: pos
+    size_gb: 60
+    home_node: node1
+  - name: pgsql
+    size_gb: 120
+    home_node: node2
+
+iscsi_initiator_prefix: iqn.2026-01.com.example.lab
+
+# ── VSA deployment (turnkey) ───────────────────────────────────────────────
+# Source image on the CONTROL node, produced from the Hyper-V package's VSA.vhd.
+# See tasks/vsa.yml for the conversion commands.
+svsan_image_dir: "{{ playbook_dir }}/../lab/svsan/images"
+
+# Pristine appliance image, converted from the Hyper-V package's VSA.vhd.
+svsan_vsa_image_pristine: "{{ svsan_image_dir }}/svsan-vsa.qcow2"
+
+# A per-node image, if one exists, wins over the pristine one. This is how an
+# ACTIVATED appliance survives a rebuild: the licence lives in the appliance's
+# own config partition and is bound to the serial, which is derived from the
+# pinned MAC. Snapshot an activated VSA to
+# lab/svsan/images/svsan-<node>-boot.qcow2 and every later rebuild comes back
+# licensed, with no re-activation and no key spent.
+svsan_vsa_image_node: "{{ svsan_image_dir }}/svsan-{{ inventory_hostname }}-boot.qcow2"
+
+svsan_vsa_image: "/var/lib/libvirt/images/{{ svsan_vsa_name }}-boot.qcow2"
+svsan_vsa_journal: "/var/lib/libvirt/images/{{ svsan_vsa_name }}-journal.qcow2"
+svsan_vsa_journal_size: 20G
+
+# Per-node VSA name, so the two appliances are distinguishable on the host and
+# in libvirt. Identity for LICENSING is the MAC, not this.
+svsan_vsa_name: "svsan-{{ inventory_hostname }}"
+
+# ── pool backing store ─────────────────────────────────────────────────────
+# A dedicated LV inside the SAME volume group Option B carves its DRBD volumes
+# from. This is deliberate: it lets Option A be built and demonstrated WITHOUT
+# destroying Option B, so both can be shown on the same hardware in one session.
+#
+# Point svsan_pool_device at the whole disk instead if you want the realistic
+# single-purpose layout — but that overwrites the DRBD volumes.
+svsan_pool_vg: vgstore
+svsan_pool_lv_name: lv-svsan-pool
+svsan_pool_lv_size: 90G
+svsan_pool_device: "/dev/{{ svsan_pool_vg }}/{{ svsan_pool_lv_name }}"
+
+# Pool name inside the appliance. Must be IDENTICAL on both VSAs — mirrored
+# targets are created by naming the remote pool.
+svsan_pool_name: pool1
+
+# Storage-network addresses for the VSAs themselves (Interface 1).
+svsan_vsa_san_ip:
+  node1: 172.18.8.20
+  node2: 172.18.8.21
+
+# The witness is deployed by this same play (roles/svsan_witness), so Majority
+# is available. Set false only when deliberately building without a witness —
+# and understand that Up has NO split-brain protection.
+svsan_witness_available: true
+
+# Attach the storage NIC to the VSA?
+#
+# FALSE for a first deployment. A pristine appliance DHCPs on every interface and
+# treats each as management, so a DHCP server anywhere on the storage segment
+# gives it a second default route and activation may fail — non-deterministically,
+# because which route wins depends on lease timing. Bring the appliance up on
+# management only, license it, then re-run with this true and give Interface 1 a
+# static, non-management address.
+#
+# DEFAULT TRUE, deliberately. It was false, and that was the wrong way round:
+# once an appliance is licensed and configured, a re-run of the play redefined
+# its domain WITHOUT the storage NIC. The running VM kept the interface until it
+# was next restarted, at which point it came back with only management — the
+# appliance logged "Physical interface was removed", the mirror fell back to the
+# management path, and the storage segment quietly went unused. A routine re-run
+# should never take an interface away from a working appliance.
+#
+# The virgin case is the one that needs the flag, and `make svsan` passes it:
+#
+#   make svsan                      # first pass, management only, then license it
+#   make svsan-attach-san           # adds the storage NIC afterwards
+#
+# Why the first pass needs it: a pristine appliance DHCPs on every interface and
+# treats each as management, so a DHCP server anywhere on the storage segment
+# gives it a second default route and activation fails non-deterministically.
+svsan_attach_san_nic: true
+
+# Set true to force-wipe the pool volume even when it already exists. Needed when
+# recovering from an orphaned target, which cannot be removed any other way.
+svsan_pool_wipe: false
+
+# ── failover timing ────────────────────────────────────────────────────────
+# Measured on 19 Aug 2026: at the defaults (noop 5/5, fast_io_fail 5) a VSA power
+# off produced a 15.7 second write stall. Detection is the larger half.
+iscsi_noop_interval: 2          # how often the initiator probes a path
+iscsi_noop_timeout: 3           # how long a probe may go unanswered
+iscsi_replacement_timeout: 10   # multipath overrides this per-device; kept sane
+multipath_fast_io_fail_tmo: 3   # give up on a path this many seconds after failure
+multipath_dev_loss_tmo: 30
+
+# Hard bounds on iscsiadm. sendtargets against a portal whose VSA is down blocks
+# indefinitely rather than failing, which hangs the entire play — and a storage
+# play is most likely to be run precisely when storage is degraded.
+iscsi_cmd_timeout: 20
+iscsi_login_timeout: 60

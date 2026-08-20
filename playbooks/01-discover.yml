@@ -1,0 +1,206 @@
+---
+# Hardware discovery — captures DETERMINISTIC identifiers and writes host_vars.
+#
+# Run against ONE node at a time as you bring them up:
+#
+#   ansible-playbook playbooks/01-discover.yml --limit node1
+#   ansible-playbook playbooks/01-discover.yml --limit node2
+#
+# Why this exists: kernel-assigned names are not stable. /dev/nvme0n1 can become
+# /dev/nvme1n1 after a reboot or a drive swap, and interface names shift when
+# firmware or hardware changes. Anything written into config must be pinned to
+# something that cannot move:
+#
+#   disks       -> /dev/disk/by-id/  (model + serial)
+#   interfaces  -> MAC address
+#
+# The generated host_vars carry both the stable identifier and the current
+# kernel name, the latter only as a human-readable comment.
+
+- name: Discover hardware and write deterministic host_vars
+  hosts: cluster
+  gather_facts: true
+  become: true
+
+  tasks:
+    # ======================================================== NETWORK
+    - name: Enumerate physical ethernet interfaces with MAC and link state
+      ansible.builtin.shell: |
+        set -o pipefail
+        for d in /sys/class/net/*; do
+          n=$(basename "$d")
+          [ "$n" = "lo" ] && continue
+          [ -e "$d/device" ] || continue                 # physical only
+          driver=$(basename "$(readlink -f "$d/device/driver" 2>/dev/null)" 2>/dev/null || echo "?")
+          case "$driver" in tun|bridge|veth) continue ;; esac
+          mac=$(cat "$d/address" 2>/dev/null)
+          [ -z "$mac" ] && continue
+          oper=$(cat "$d/operstate" 2>/dev/null)
+          carrier=$(cat "$d/carrier" 2>/dev/null || echo 0)
+          speed=$(cat "$d/speed" 2>/dev/null || echo -1)
+          bus=$(basename "$(readlink -f "$d/device" 2>/dev/null)" 2>/dev/null)
+          echo "$n|$mac|$oper|$carrier|$speed|$driver|$bus"
+        done
+      args:
+        executable: /bin/bash
+      register: _nics
+      changed_when: false
+
+    - name: Parse interfaces
+      ansible.builtin.set_fact:
+        _iface: >-
+          {{ _nics.stdout_lines | map('split', '|') | map('zip', [])
+             | list if false else
+             _nics.stdout_lines
+             | map('regex_replace',
+                   '^([^|]*)\|([^|]*)\|([^|]*)\|([^|]*)\|([^|]*)\|([^|]*)\|(.*)$',
+                   '{"name":"\1","mac":"\2","oper":"\3","carrier":"\4","speed":"\5","driver":"\6","bus":"\7"}')
+             | map('from_json') | list }}
+
+    - name: Identify the management interface (the one carrying the default route)
+      ansible.builtin.set_fact:
+        _mgmt: "{{ (_iface | selectattr('name','equalto', ansible_default_ipv4.interface | default('')) | list | first) | default({}) }}"
+
+    - name: Identify candidate storage interfaces (physical, not management)
+      ansible.builtin.set_fact:
+        _repl_candidates: >-
+          {{ _iface | rejectattr('name','equalto', _mgmt.name | default('')) | list }}
+
+    # Prefer one that already has carrier — that is the cable you plugged in.
+    - name: Choose the storage interface
+      ansible.builtin.set_fact:
+        _repl: >-
+          {{ ((_repl_candidates | selectattr('carrier','equalto','1') | list | first)
+              | default(_repl_candidates | first, true)) | default({}, true) }}
+
+    # ======================================================== DISKS
+    # by-id names are stable across reboots and controller reordering.
+    # Preference order: model_serial > wwn > eui. Partitions excluded.
+    - name: Map every block device to its stable by-id path
+      ansible.builtin.shell: |
+        set -o pipefail
+        rootdisk=$(lsblk -no PKNAME "$(findmnt -no SOURCE /)" 2>/dev/null | head -1)
+        for d in /sys/block/*; do
+          n=$(basename "$d")
+          case "$n" in loop*|ram*|sr*|zram*|dm-*|md*|fd*) continue ;; esac
+          [ "$(cat "$d/removable" 2>/dev/null)" = "1" ] && continue
+          readlink -f "$d/device" 2>/dev/null | grep -q usb && continue
+
+          # best stable link for this device
+          best=""; wwn=""; other=""
+          for l in /dev/disk/by-id/*; do
+            [ -e "$l" ] || continue
+            case "$l" in *-part*) continue ;; esac
+            [ "$(readlink -f "$l")" = "/dev/$n" ] || continue
+            b=$(basename "$l")
+            case "$b" in
+              nvme-eui.*|wwn-*) wwn="$l" ;;
+              nvme-*|ata-*|scsi-*) [ -z "$best" ] && best="$l" ;;
+              *) other="$l" ;;
+            esac
+          done
+          link="${best:-${wwn:-$other}}"
+          [ -n "$link" ] || continue
+
+          size=$(lsblk -dno SIZE "/dev/$n" | tr -d ' ')
+          model=$(cat "$d/device/model" 2>/dev/null | xargs || echo "?")
+          # is it free? no partitions, no holders, no filesystem, not the root disk
+          free=yes
+          [ "$n" = "$rootdisk" ] && free=no
+          ls -d "$d"/"$n"* >/dev/null 2>&1 && free=no
+          [ -n "$(ls "$d/holders" 2>/dev/null)" ] && free=no
+          [ -n "$(lsblk -no FSTYPE "/dev/$n" 2>/dev/null | grep -v '^$')" ] && free=no
+          isroot=no; [ "$n" = "$rootdisk" ] && isroot=yes
+          echo "$n|$link|$size|$model|$free|$isroot"
+        done
+      args:
+        executable: /bin/bash
+      register: _disks
+      changed_when: false
+
+    - name: Parse disks
+      ansible.builtin.set_fact:
+        _disk: >-
+          {{ _disks.stdout_lines
+             | map('regex_replace',
+                   '^([^|]*)\|([^|]*)\|([^|]*)\|([^|]*)\|([^|]*)\|(.*)$',
+                   '{"kernel":"\1","byid":"\2","size":"\3","model":"\4","free":"\5","isroot":"\6"}')
+             | map('from_json') | list }}
+
+    - name: Select the storage device and identify the OS disk
+      ansible.builtin.set_fact:
+        _storage: "{{ (_disk | selectattr('free','equalto','yes') | list | first) | default({}, true) }}"
+        _os: "{{ (_disk | selectattr('isroot','equalto','yes') | list | first) | default({}, true) }}"
+
+    # ======================================================== BMC
+    - name: Read the BMC address
+      ansible.builtin.shell: |
+        set -o pipefail
+        ipmitool lan print 1 2>/dev/null | awk -F': ' '/^IP Address  /{print $2}' | tr -d ' '
+      args:
+        executable: /bin/bash
+      register: _bmc
+      changed_when: false
+      failed_when: false
+
+    # ======================================================== REPORT
+    - name: Hardware inventory
+      ansible.builtin.debug:
+        msg: |
+          ══ {{ inventory_hostname }} — {{ ansible_product_name | default('?') }} ══
+
+          {{ ansible_processor_vcpus }} cores / {{ (ansible_memtotal_mb / 1024) | round | int }} GB
+          virtualisation: {{ 'ok' if 'vmx' in ansible_processor_flags or 'svm' in ansible_processor_flags else 'DISABLED — enable in firmware' }}
+
+          INTERFACES (pinned by MAC, names shown only for reference)
+          {% for i in _iface %}
+            {{ '%-14s' | format(i.name) }} {{ i.mac }}  {{ 'LINK' if i.carrier == '1' else 'down' }}  {{ (i.speed | int > 0) | ternary(i.speed ~ 'Mb', '-') }}  {{ i.driver }}
+          {% endfor %}
+            → management : {{ _mgmt.name | default('NONE') }}  ({{ _mgmt.mac | default('-') }})
+            → storage    : {{ _repl.name | default('NONE — only one NIC') }}  ({{ _repl.mac | default('-') }})
+
+          DISKS (pinned by-id, kernel names are not stable)
+          {% for d in _disk %}
+            {{ '%-8s' | format(d.kernel) }} {{ '%-8s' | format(d.size) }} {{ 'FREE' if d.free == 'yes' else 'in use' }}  {{ d.model }}
+              {{ d.byid }}
+          {% endfor %}
+            → OS disk       : {{ _os.byid | default('unknown') }}
+            → storage device: {{ _storage.byid | default('NONE FOUND') }}
+
+          BMC: {{ _bmc.stdout if _bmc.stdout else 'not visible from the OS — read it from firmware' }}
+
+    - name: Refuse to continue without a free block device
+      ansible.builtin.assert:
+        that: _storage.byid is defined and _storage.byid | length > 0
+        fail_msg: |
+          No free block device on {{ inventory_hostname }}.
+          The storage layer needs one that is not the OS disk. Add a drive, or
+          create a partition from unallocated space and re-run.
+
+    - name: Warn when there is no separate storage interface
+      ansible.builtin.debug:
+        msg: >
+          {{ inventory_hostname }} has only one physical NIC. The storage VLAN
+          will have to be tagged onto the management interface, or you accept a
+          single-ring cluster. Set repl_vlan_id to tag it.
+      when: _repl.mac is not defined or _repl.mac | length == 0
+
+    # ======================================================== WRITE
+    - name: Write deterministic host_vars
+      ansible.builtin.template:
+        src: ../templates/host_vars.yml.j2
+        dest: "../inventory/host_vars/{{ inventory_hostname }}.yml"
+        mode: "0644"
+      delegate_to: localhost
+      become: false
+
+    - name: Written
+      ansible.builtin.debug:
+        msg: |
+          inventory/host_vars/{{ inventory_hostname }}.yml written.
+
+          Everything in it is pinned to something that cannot change on reboot:
+          interfaces by MAC, the storage device by-id.
+
+          Confirm the storage VLAN settings in inventory/group_vars/all.yml match
+          what the switch is configured for, then bring up the other node.

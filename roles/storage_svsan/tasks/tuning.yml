@@ -1,0 +1,80 @@
+---
+# Failover timing only. Kept separate from main.yml so it can be applied to a
+# running system without re-running the VSA build.
+#
+# Failover time is DETECTION plus RECOVERY, and detection dominates. At the
+# defaults (noop 5/5, fast_io_fail 5) a VSA power-off produced a 15.7 second
+# write stall — up to 10s to notice the path was dead, then 5s to give up on it.
+#
+# Note the live session Recovery Timeout is 5, not the 15 in
+# replacement_timeout: multipath overrides it per-device, so tuning
+# replacement_timeout alone changes nothing at all.
+
+- name: Tune iSCSI failure detection and recovery
+  ansible.builtin.lineinfile:
+    path: /etc/iscsi/iscsid.conf
+    regexp: "^\\s*{{ item.k | regex_escape }}\\s*="
+    line: "{{ item.k }} = {{ item.v }}"
+    state: present
+  loop:
+    - { k: "node.session.timeo.replacement_timeout", v: "{{ iscsi_replacement_timeout }}" }
+    - { k: "node.conn[0].timeo.noop_out_interval",   v: "{{ iscsi_noop_interval }}" }
+    - { k: "node.conn[0].timeo.noop_out_timeout",    v: "{{ iscsi_noop_timeout }}" }
+  loop_control:
+    label: "{{ item.k }} = {{ item.v }}"
+
+- name: Re-render multipath configuration
+  ansible.builtin.template:
+    src: multipath.conf.j2
+    dest: /etc/multipath.conf
+    mode: "0644"
+  register: _mp
+
+- name: Restart iscsid
+  ansible.builtin.systemd:
+    name: iscsid
+    state: restarted
+
+- name: Reload multipath
+  ansible.builtin.systemd:
+    name: multipathd
+    state: restarted
+
+# iscsid.conf is read at LOGIN, so running sessions keep the old values. The node
+# records must be updated and the sessions rebuilt, or the tuning silently does
+# nothing and the next failover test measures the old numbers.
+- name: Push the new timing into existing node records
+  ansible.builtin.command: "timeout 15 iscsiadm -m node -o update -n {{ item.k }} -v {{ item.v }}"
+  loop:
+    - { k: "node.session.timeo.replacement_timeout", v: "{{ iscsi_replacement_timeout }}" }
+    - { k: "node.conn[0].timeo.noop_out_interval",   v: "{{ iscsi_noop_interval }}" }
+    - { k: "node.conn[0].timeo.noop_out_timeout",    v: "{{ iscsi_noop_timeout }}" }
+  loop_control:
+    label: "{{ item.k }}"
+  changed_when: true
+  failed_when: false
+
+- name: Re-establish sessions so the new values take effect
+  ansible.builtin.shell: |
+    timeout 40 iscsiadm -m node --logoutall=all || true
+    sleep 3
+    timeout 60 iscsiadm -m node --loginall=automatic || true
+    sleep 5
+    timeout 20 iscsiadm -m session --rescan || true
+  args:
+    executable: /bin/bash
+  changed_when: true
+
+- name: Confirm the values now in force
+  ansible.builtin.shell: |
+    set -o pipefail
+    echo "recovery_tmo: $(cat /sys/class/iscsi_session/session*/recovery_tmo 2>/dev/null | sort -u | tr '\n' ' ')"
+    echo "paths: $(multipath -ll 2>/dev/null | grep -c 'active ready') active"
+  args:
+    executable: /bin/bash
+  register: _now
+  changed_when: false
+
+- name: Report
+  ansible.builtin.debug:
+    var: _now.stdout_lines

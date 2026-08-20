@@ -1,0 +1,11 @@
+---
+# The arbiter is a conventionally installed RHEL host, not a bootc image.
+# os_mode defaults to 'bootc' in all.yml for the cluster nodes, which skips
+# every package task; the arbiter must install its own packages.
+os_mode: package
+
+# corosync-qnetd lives in the HighAvailability repo.
+rhel_repos:
+  - rhel-9-for-x86_64-baseos-rpms
+  - rhel-9-for-x86_64-appstream-rpms
+  - rhel-9-for-x86_64-highavailability-rpms

@@ -1,0 +1,69 @@
+---
+- name: Enable required RHEL repositories
+  community.general.rhsm_repository:
+    name: "{{ rhel_repos }}"
+    state: enabled
+  when:
+    - rhel_repos | length > 0
+    - not is_bootc | bool
+  failed_when: false          # tolerate already-enabled / no-subscription labs
+
+- name: Install base packages
+  ansible.builtin.dnf:
+    name:
+      - vim-enhanced
+      - tar
+      - bash-completion
+      - chrony
+      - firewalld
+      - policycoreutils-python-utils
+      - python3-libselinux
+      - lvm2
+      - xfsprogs
+      - nmap-ncat
+    state: present
+  when: not is_bootc | bool
+
+- name: Ensure chrony is running
+  ansible.builtin.systemd:
+    name: chronyd
+    enabled: true
+    state: started
+
+- name: Ensure firewalld is running
+  ansible.builtin.systemd:
+    name: firewalld
+    enabled: true
+    state: started
+
+# Time skew breaks corosync membership and confuses DRBD/SvSAN logs.
+- name: Verify clock is synchronised
+  ansible.builtin.command: chronyc tracking
+  register: _chrony
+  changed_when: false
+  failed_when: false
+
+- name: Warn if clock is not synchronised
+  ansible.builtin.debug:
+    msg: "WARNING: chrony not synchronised on {{ inventory_hostname }} — cluster membership may be unstable"
+  when: "'Leap status     : Normal' not in (_chrony.stdout | default(''))"
+
+- name: Populate /etc/hosts for both rings
+  ansible.builtin.blockinfile:
+    path: /etc/hosts
+    marker: "# {mark} ANSIBLE store-platform"
+    block: |
+      {% for h in groups['cluster'] %}
+      {{ hostvars[h].lan_ip }}  {{ hostvars[h].node_name }}
+      {{ hostvars[h].repl_ip }}  {{ hostvars[h].node_name }}-repl
+      {% endfor %}
+      {{ qnetd_host }}  qnetd
+
+- name: Set hostname
+  ansible.builtin.hostname:
+    name: "{{ node_name }}"
+
+- name: Keep SELinux enforcing
+  ansible.posix.selinux:
+    policy: targeted
+    state: enforcing

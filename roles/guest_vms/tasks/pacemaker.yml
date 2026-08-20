@@ -1,0 +1,79 @@
+---
+# Per-VM VirtualDomain resources. allow-migrate=true is the point of the whole
+# design — it is what gives vMotion-equivalent behaviour.
+
+- name: Create VirtualDomain resources
+  ansible.builtin.command: >
+    pcs resource create vm-{{ vm.name }} ocf:heartbeat:VirtualDomain
+    config=/etc/pacemaker/vm/{{ vm.name }}.xml
+    migration_transport=ssh
+    meta allow-migrate=true resource-stickiness=1000
+    op monitor interval=30s timeout=60s
+    op start timeout=120s op stop timeout=120s
+    op migrate_to timeout=300s op migrate_from timeout=300s
+  loop: "{{ guest_vms }}"
+  loop_control:
+    loop_var: vm
+    label: "vm-{{ vm.name }}"
+  delegate_to: "{{ node1_name }}"
+  register: _vd
+  changed_when: _vd.rc == 0
+  failed_when: _vd.rc not in [0, 1]
+
+- name: Prefer each guest on its home node
+  ansible.builtin.command: >
+    pcs constraint location vm-{{ vm.name }} prefers {{ vm.home_node }}=100
+  loop: "{{ guest_vms }}"
+  loop_control:
+    loop_var: vm
+    label: "vm-{{ vm.name }} -> {{ vm.home_node }}"
+  delegate_to: "{{ node1_name }}"
+  register: _lc
+  changed_when: _lc.rc == 0
+  failed_when: _lc.rc not in [0, 1]
+
+# Option B only: a guest must not start before its replicated filesystem is
+# mounted, and must follow that filesystem wherever it goes.
+- name: Colocate guests with their DRBD filesystem
+  ansible.builtin.command: >
+    pcs constraint colocation add vm-{{ vm.name }}
+    with fs-{{ 'store-a' if vm.home_node == node1_name else 'store-b' }} INFINITY
+  loop: "{{ guest_vms }}"
+  loop_control:
+    loop_var: vm
+    label: "vm-{{ vm.name }}"
+  when: storage_backend == 'drbd'
+  delegate_to: "{{ node1_name }}"
+  register: _cc
+  changed_when: _cc.rc == 0
+  failed_when: _cc.rc not in [0, 1]
+
+- name: Order filesystem before guest
+  ansible.builtin.command: >
+    pcs constraint order start fs-{{ 'store-a' if vm.home_node == node1_name else 'store-b' }}
+    then start vm-{{ vm.name }} INFINITY
+  loop: "{{ guest_vms }}"
+  loop_control:
+    loop_var: vm
+    label: "vm-{{ vm.name }}"
+  when: storage_backend == 'drbd'
+  delegate_to: "{{ node1_name }}"
+  register: _oc
+  changed_when: _oc.rc == 0
+  failed_when: _oc.rc not in [0, 1]
+
+- name: Wait for the cluster to settle
+  ansible.builtin.command: crm_resource --wait
+  delegate_to: "{{ node1_name }}"
+  changed_when: false
+  failed_when: false
+
+- name: Show cluster status
+  ansible.builtin.command: pcs status
+  register: _st
+  delegate_to: "{{ node1_name }}"
+  changed_when: false
+
+- name: Report
+  ansible.builtin.debug:
+    var: _st.stdout_lines

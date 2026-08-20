@@ -1,0 +1,64 @@
+# StorMagic Neutral Storage Host (NSH) — the SvSAN mirror witness — as a
+# container, so it can be deployed to any RHEL 9 host with podman rather than
+# needing a dedicated appliance VM per datacenter.
+#
+# WHY THIS EXISTS
+# StorMagic ships the witness as a Debian package (armhf from the trial portal)
+# or as a vSphere appliance OVA. Neither suits a RHEL fleet. The amd64 binaries
+# do exist — inside the vCenter plugin appliance — and they are self-contained:
+# they carry their own loader and glibc under lib/, so they run unmodified on
+# UBI9 regardless of the host's glibc.
+#
+# WHAT THE WITNESS DOES
+# It arbitrates MIRROR ownership: with two VSAs and a witness, a majority of two
+# of three must be present for a mirror to stay online. This is what makes the
+# 'Majority' isolation policy available; without it SvSAN falls back to 'Up',
+# which keeps a plex online whenever it is healthy and therefore has NO
+# split-brain protection.
+#
+# It is NOT the same thing as corosync-qnetd, which arbitrates CLUSTER
+# MEMBERSHIP. Both should run on the same arbiter host so the two quorum systems
+# share a failure domain and partition identically. See docs/09 §5.
+#
+# Binaries are NOT vendored into this repo — they are StorMagic's, and licensed
+# accordingly. extract-nsh.sh pulls them from a package you have downloaded.
+
+FROM registry.access.redhat.com/ubi9/ubi-minimal:latest
+
+ARG NSH_VERSION=6.7.0.3
+
+LABEL name="nsh-witness" \
+      version="${NSH_VERSION}" \
+      summary="StorMagic SvSAN Neutral Storage Host (mirror witness)" \
+      description="Arbitrates SvSAN mirror ownership for two-node stores. Runs \
+the smclusterd and smdiscod daemons from StorMagic's own amd64 build."
+
+# The ELF interpreter is hard-coded to /opt/stormagic/SvSAN/lib/ld-linux-x86-64.so.2,
+# so the tree has to live at exactly this path. That is also what makes the image
+# independent of the base image's glibc.
+COPY bin/ /opt/stormagic/SvSAN/bin/
+COPY lib/ /opt/stormagic/SvSAN/lib/
+COPY dirs /opt/stormagic/SvSAN/dirs
+
+RUN chmod 0755 /opt/stormagic/SvSAN/bin/* /opt/stormagic/SvSAN/lib/ld-linux-x86-64.so.2 && \
+    mkdir -p /opt/stormagic/SvSAN/etc \
+             /opt/stormagic/SvSAN/log \
+             /opt/stormagic/SvSAN/scratch \
+             /opt/stormagic/SvSAN/persist \
+             /var/state /var/socket && \
+    printf 'INSTALL_OEM="stormagic"\nINSTALL_PACKAGE="SvSAN"\nINSTALL_ROOT="/opt/stormagic/SvSAN"\n' \
+      > /etc/sysconfig/locations
+
+COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod 0755 /usr/local/bin/entrypoint.sh
+
+# Mirror state must outlive the container: it records which plex was last known
+# good, and losing it costs the witness its opinion after a restart.
+VOLUME ["/var/state", "/opt/stormagic/SvSAN/persist"]
+
+# 4174/tcp  witness <-> VSA quorum
+# 4174/udp + multicast  automatic discovery (LAN only; irrelevant over a WAN,
+#                       where VSAs are pointed at the witness explicitly)
+EXPOSE 4174/tcp 4174/udp
+
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

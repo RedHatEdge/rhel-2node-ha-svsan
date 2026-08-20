@@ -1,0 +1,386 @@
+---
+# Runs on the guest's home node only.
+#
+# Storage differs by backend:
+#   drbd  — qcow2 file on the DRBD-backed XFS mount for this node
+#   svsan — the raw mirrored LUN itself; no file, no host filesystem
+
+- name: Resolve this guest's disk path
+  ansible.builtin.set_fact:
+    _disk: >-
+      {{ ('/var/store-a/' ~ vm.name ~ '.qcow2') if (storage_backend == 'drbd' and vm.home_node == node1_name)
+         else ('/var/store-b/' ~ vm.name ~ '.qcow2') if storage_backend == 'drbd'
+         else ('/dev/mapper/' ~ vm.name) }}
+    _disk_fmt: "{{ 'qcow2' if storage_backend == 'drbd' else 'raw' }}"
+
+- name: Confirm the backing store is present
+  ansible.builtin.stat:
+    path: "{{ _disk | dirname if storage_backend == 'drbd' else _disk }}"
+  register: _backing
+
+- name: Fail with a useful message if storage is not ready
+  ansible.builtin.assert:
+    that: _backing.stat.exists
+    fail_msg: >-
+      {{ _disk }} backing store missing on {{ inventory_hostname }}.
+      {% if storage_backend == 'drbd' %}Is the DRBD filesystem mounted here?
+      Check: pcs status{% else %}Is the mirrored LUN presented and multipath
+      configured? Check: multipath -ll{% endif %}
+
+# ------------------------------------------------------------------ cloud-init
+# cloud-init's NoCloud datasource looks for files named EXACTLY user-data and
+# meta-data. Naming them per-VM puts pos-user-data on the ISO, which cloud-init
+# mounts, finds nothing it recognises in, and silently ignores — so no users are
+# created at all and the guest refuses every login while looking perfectly
+# healthy. Build each VM's seed in its own directory instead.
+- name: Create a per-guest cloud-init staging directory
+  ansible.builtin.file:
+    path: "/tmp/cidata-{{ vm.name }}"
+    state: directory
+    mode: "0755"
+
+- name: Write cloud-init user-data
+  ansible.builtin.copy:
+    dest: "/tmp/cidata-{{ vm.name }}/user-data"
+    mode: "0644"
+    content: |
+      #cloud-config
+      hostname: {{ vm.name }}
+      users:
+        - name: lab
+          sudo: ALL=(ALL) NOPASSWD:ALL
+          shell: /bin/bash
+          lock_passwd: false
+          plain_text_passwd: <GUEST-PASSWORD>
+          ssh_authorized_keys:
+            - "{{ guest_ssh_key }}"
+      # Ubuntu cloud images ship PasswordAuthentication no in
+      # /etc/ssh/sshd_config.d/60-cloudimg-settings.conf, and that drop-in beats
+      # cloud-init's ssh_pwauth. The key is what actually gets you in; the
+      # password is a console fallback. A POS guest should not take password SSH.
+      ssh_pwauth: false
+      package_update: true
+      packages:
+        - qemu-guest-agent
+      {% if vm.name == 'pgsql' %}
+        - postgresql
+        - postgresql-contrib
+      {% endif %}
+      write_files:
+      {% if vm.name == 'pgsql' %}
+        # Continuous transaction load. Without it a failover test moves an IDLE
+        # database, which proves much less than moving one mid-transaction — the
+        # question a POS estate actually asks is what happens to writes in flight.
+        - path: /etc/systemd/system/pgbench-load.service
+          content: |
+            [Unit]
+            Description=Continuous pgbench transaction load
+            After=postgresql.service
+            Requires=postgresql.service
+            [Service]
+            User=postgres
+            ExecStart=/usr/bin/pgbench -c 4 -j 2 -T 86400 -P 10 --progress-timestamp postgres
+            Restart=always
+            RestartSec=5
+            StandardOutput=append:/var/log/pgbench.log
+            StandardError=append:/var/log/pgbench.log
+            [Install]
+            WantedBy=multi-user.target
+      {% endif %}
+      {% if vm.name == 'pos' %}
+        # Stands in for the POS application until we know what theirs is. One
+        # timestamped record per second, fsynced, so the log measures the outage
+        # itself: the gap between two lines IS the recovery time, and the last
+        # line before the gap is exactly what survived.
+        - path: /usr/local/bin/pos-sim
+          permissions: "0755"
+          content: |
+            #!/bin/bash
+            LOG=/var/lib/pos/transactions.log
+            mkdir -p /var/lib/pos
+            n=$(wc -l < "$LOG" 2>/dev/null || echo 0)
+            while true; do
+              n=$((n+1))
+              printf '%s txn=%08d store=0001 amount=%d.%02d\n' \
+                "$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)" "$n" $((RANDOM%80+1)) $((RANDOM%100)) >> "$LOG"
+              sync -f "$LOG"
+              sleep 1
+            done
+        # A lens on the same log, not a second instrument. It reads the file
+        # pos-sim writes and nothing else, so what the screen shows is exactly
+        # what reached the mirrored LUN — no cache, no buffer, no framework
+        # between the claim and the evidence.
+      {% raw %}
+        - path: /usr/local/bin/pos-view
+          permissions: "0755"
+          content: |
+            #!/usr/bin/env python3
+            import http.server, socketserver, os, time, html
+            LOG = "/var/lib/pos/transactions.log"
+            PAGE = """<!doctype html><meta charset=utf-8>
+            <meta http-equiv=refresh content=2>
+            <title>Store 0001 - POS</title>
+            <style>
+             body{{margin:0;background:#fff;color:#151515;
+                  font-family:"Red Hat Text",system-ui,sans-serif}}
+             .bar{{padding:26px 40px;color:#fff;background:{col}}}
+             .bar h1{{margin:0;font-size:34px;font-weight:500;letter-spacing:-.02em}}
+             .bar p{{margin:6px 0 0;opacity:.9;font-size:15px}}
+             .wrap{{padding:32px 40px;max-width:900px}}
+             .n{{font-size:64px;font-weight:600;font-variant-numeric:tabular-nums;
+                 letter-spacing:-.03em;line-height:1}}
+             .lbl{{color:#6a6e73;font-size:12px;letter-spacing:.09em;
+                   text-transform:uppercase;margin-bottom:6px}}
+             .grid{{display:flex;gap:64px;margin-bottom:30px}}
+             pre{{background:#f5f5f5;border:1px solid #d2d2d2;padding:16px 18px;
+                  font-family:"Red Hat Mono",monospace;font-size:13px;
+                  overflow-x:auto;margin:0}}
+            </style>
+            <div class=bar><h1>Store 0001 &middot; Point of Sale</h1>
+            <p>{msg}</p></div>
+            <div class=wrap>
+              <div class=grid>
+                <div><div class=lbl>Transactions</div><div class=n>{n}</div></div>
+                <div><div class=lbl>Last write</div><div class=n>{age}s</div></div>
+              </div>
+              <div class=lbl>Recent</div><pre>{tail}</pre>
+            </div>"""
+            class H(http.server.BaseHTTPRequestHandler):
+                def log_message(self, *a): pass
+                def do_GET(self):
+                    try:
+                        with open(LOG) as f: lines = f.readlines()
+                        age = int(time.time() - os.path.getmtime(LOG))
+                    except Exception:
+                        lines, age = [], 999
+                    live = age <= 3
+                    body = PAGE.format(
+                        col="#3e8635" if live else "#ee0000",
+                        msg="Taking transactions" if live else
+                            "NO TRANSACTIONS - store is not writing",
+                        n=len(lines), age=age,
+                        tail=html.escape("".join(lines[-12:]) or "(nothing yet)"))
+                    b = body.encode()
+                    self.send_response(200)
+                    self.send_header("Content-Type","text/html; charset=utf-8")
+                    self.send_header("Content-Length",str(len(b)))
+                    # Without these the browser serves a cached page and the
+                    # counter appears frozen — which during a failover test
+                    # looks exactly like the outage you are trying to measure.
+                    self.send_header("Cache-Control","no-store, must-revalidate")
+                    self.send_header("Pragma","no-cache")
+                    self.end_headers(); self.wfile.write(b)
+            socketserver.TCPServer.allow_reuse_address = True
+            socketserver.TCPServer(("",8080), H).serve_forever()
+      {% endraw %}
+        - path: /etc/systemd/system/pos-view.service
+          content: |
+            [Unit]
+            Description=POS transaction viewer
+            After=pos-sim.service
+            [Service]
+            ExecStart=/usr/local/bin/pos-view
+            Restart=always
+            RestartSec=2
+            [Install]
+            WantedBy=multi-user.target
+        - path: /etc/systemd/system/pos-sim.service
+          content: |
+            [Unit]
+            Description=POS transaction simulator
+            After=local-fs.target
+            [Service]
+            ExecStart=/usr/local/bin/pos-sim
+            Restart=always
+            RestartSec=2
+            [Install]
+            WantedBy=multi-user.target
+      {% endif %}
+      runcmd:
+        - systemctl enable --now qemu-guest-agent
+      {% if vm.name == 'pgsql' %}
+        - systemctl enable --now postgresql
+        - su - postgres -c "pgbench -i -s 50 postgres"
+        - systemctl daemon-reload
+        - systemctl enable --now pgbench-load
+      {% endif %}
+      {% if vm.name == 'pos' %}
+        - systemctl daemon-reload
+        - systemctl enable --now pos-sim
+        - systemctl enable --now pos-view
+      {% endif %}
+
+- name: Write cloud-init meta-data
+  ansible.builtin.copy:
+    dest: "/tmp/cidata-{{ vm.name }}/meta-data"
+    mode: "0644"
+    content: |
+      instance-id: {{ vm.name }}-{{ ansible_date_time.epoch }}
+      local-hostname: {{ vm.name }}
+
+- name: Build the cloud-init seed ISO
+  # Rebuilt whenever content changes, but harmless on an existing guest: cloud-init
+  # only reads it on first boot of an instance-id it has not seen.
+  ansible.builtin.command: >
+    genisoimage -output /var/lib/libvirt/images/{{ vm.name }}-seed.iso
+    -volid cidata -joliet -rock
+    /tmp/cidata-{{ vm.name }}/user-data /tmp/cidata-{{ vm.name }}/meta-data
+  changed_when: true
+
+# ----------------------------------------------------------------------- disk
+- name: Create the guest disk (DRBD — qcow2 on the replicated filesystem)
+  ansible.builtin.command: >
+    qemu-img convert -O qcow2
+    /var/lib/libvirt/images/ubuntu-base.img {{ _disk }}
+  args:
+    creates: "{{ _disk }}"
+  when: storage_backend == 'drbd'
+
+- name: Grow the guest disk
+  ansible.builtin.command: "qemu-img resize {{ _disk }} 40G"
+  when: storage_backend == 'drbd'
+  changed_when: true
+  failed_when: false
+
+# DESTRUCTIVE. This overwrites the guest's disk, and it used to run on every
+# pass — so applying an unrelated change (a firewall rule, a libvirt setting)
+# silently destroyed the running workload and its history. A demo where you
+# cannot adjust configuration without losing your data is not a demo.
+#
+# It now runs only when the LUN carries no filesystem, or when a rebuild is asked
+# for explicitly with -e guest_rebuild=true.
+- name: Check whether the LUN already holds a guest
+  ansible.builtin.command: "blkid -p {{ _disk }}"
+  register: _lun
+  changed_when: false
+  failed_when: false
+  when: storage_backend == 'svsan'
+
+- name: Write the base image onto the mirrored LUN (SvSAN — raw)
+  ansible.builtin.shell: |
+    set -o pipefail
+    qemu-img convert -O raw /var/lib/libvirt/images/ubuntu-base.img {{ _disk }}
+  args:
+    executable: /bin/bash
+  when:
+    - storage_backend == 'svsan'
+    - (_lun.rc | default(2)) != 0 or (guest_rebuild | default(false) | bool)
+  changed_when: true
+
+- name: Note that the existing guest was left alone
+  ansible.builtin.debug:
+    msg: >-
+      {{ vm.name }}: LUN already holds a guest — left untouched. Pass
+      -e guest_rebuild=true to overwrite it.
+  when:
+    - storage_backend == 'svsan'
+    - (_lun.rc | default(2)) == 0
+    - not (guest_rebuild | default(false) | bool)
+
+# ------------------------------------------------------------------- define VM
+- name: Check whether the domain already exists
+  ansible.builtin.command: "virsh dominfo {{ vm.name }}"
+  register: _dom
+  changed_when: false
+  failed_when: false
+
+# virt-install only runs when the domain is absent, so an existing domain keeps
+# whatever MAC it was first created with — including a random one from before
+# the addresses were pinned. Rewriting the disk does not touch the definition, so
+# the guest comes back on the old MAC and takes a different DHCP lease. Detect
+# the mismatch and rebuild the definition.
+- name: Check the domain's MAC against the pinned value
+  ansible.builtin.shell: |
+    set -o pipefail
+    virsh domiflist {{ vm.name }} 2>/dev/null | awk '/bridge/{print $5}' | head -1
+  args:
+    executable: /bin/bash
+  register: _curmac
+  changed_when: false
+  failed_when: false
+  when: _dom.rc == 0
+
+- name: Remove a domain whose MAC does not match inventory
+  ansible.builtin.shell: |
+    virsh destroy {{ vm.name }} 2>/dev/null || true
+    virsh undefine {{ vm.name }} 2>/dev/null || true
+  args:
+    executable: /bin/bash
+  when:
+    - _dom.rc == 0
+    - (_curmac.stdout | default('') | trim) != guest_macs[vm.name]
+  register: _macfix
+  changed_when: true
+
+- name: Re-check domain existence after a MAC correction
+  ansible.builtin.command: "virsh dominfo {{ vm.name }}"
+  register: _dom
+  changed_when: false
+  failed_when: false
+  when: _macfix.changed | default(false)
+
+- name: Define the guest
+  ansible.builtin.shell: |
+    virt-install \
+      --name {{ vm.name }} \
+      --memory {{ vm.memory_mb }} \
+      --vcpus {{ vm.vcpus }} \
+      --cpu host-passthrough \
+      --import \
+      --disk path={{ _disk }},bus=virtio,format={{ _disk_fmt }},cache=none \
+      --disk path=/var/lib/libvirt/images/{{ vm.name }}-seed.iso,device=cdrom \
+      --network bridge={{ lan_bridge }},model=virtio,mac={{ guest_macs[vm.name] }} \
+      --channel unix,target_type=virtio,name=org.qemu.guest_agent.0 \
+      --graphics none --noautoconsole --osinfo detect=on,require=off
+  when: _dom.rc != 0
+  changed_when: true
+
+# Pacemaker needs the domain XML on BOTH nodes so either can start the guest.
+- name: Export the domain XML
+  ansible.builtin.shell: "virsh dumpxml {{ vm.name }} > /etc/libvirt/qemu/{{ vm.name }}.xml"
+  changed_when: true
+
+# The XML must live somewhere libvirt does NOT own, because `virsh undefine`
+# below deletes /etc/libvirt/qemu/<name>.xml — the very file Pacemaker needs to
+# start the guest. Leaving it there produced the perfect inversion: each node
+# ended up holding only its PEER's XML, because the home copy was created, copied
+# away, and then destroyed by undefine.
+- name: Ensure the peer has the Pacemaker guest config directory
+  ansible.builtin.file:
+    path: /etc/pacemaker/vm
+    state: directory
+    mode: "0755"
+  delegate_to: "{{ groups['cluster'] | difference([inventory_hostname]) | first }}"
+
+- name: Ensure the Pacemaker guest config directory exists
+  ansible.builtin.file:
+    path: /etc/pacemaker/vm
+    state: directory
+    mode: "0755"
+
+- name: Capture the domain XML where undefine cannot reach it
+  ansible.builtin.shell: |
+    virsh dumpxml {{ vm.name }} > /etc/pacemaker/vm/{{ vm.name }}.xml
+  changed_when: true
+
+# Both nodes need the XML *and* the seed ISO, because the XML references the ISO
+# and either node may have to start this guest. Shipping only the XML gives the
+# peer a definition it cannot honour — it fails as "Cannot access storage file",
+# which reads like a storage fault rather than a missing file.
+- name: Ship the XML and the cloud-init seed to the peer
+  ansible.builtin.command: >
+    scp -o StrictHostKeyChecking=no {{ item.src }}
+    root@{{ groups['cluster'] | difference([inventory_hostname]) | first }}:{{ item.dest }}
+  loop:
+    - { src: "/etc/pacemaker/vm/{{ vm.name }}.xml", dest: "/etc/pacemaker/vm/" }
+    - { src: "/var/lib/libvirt/images/{{ vm.name }}-seed.iso", dest: "/var/lib/libvirt/images/" }
+  loop_control:
+    label: "{{ item.src | basename }}"
+  changed_when: true
+
+# Hand the guest to Pacemaker — it owns start, stop, placement and migration.
+- name: Stop and undefine so Pacemaker takes ownership
+  ansible.builtin.command: "virsh {{ item }} {{ vm.name }}"
+  loop: [destroy, undefine]
+  changed_when: true
+  failed_when: false
