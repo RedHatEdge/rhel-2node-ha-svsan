@@ -101,5 +101,5 @@
 
 # Presenting the target to the hosts is a separate, tagged step: it can only run
 # after the mirror exists and the host IQNs are in its access control list.
-# Presentation is NOT part of the build — see playbooks/11-option-a-attach.yml.
+# Presentation is NOT part of the build — see playbooks/11-present-targets.yml.
 # It cannot run until the target exists and the host IQNs are in its ACL.

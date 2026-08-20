@@ -2,7 +2,7 @@
 # Option A — StorMagic SvSAN. Complete, standalone build.
 #
 #   make svsan          (or)
-#   ansible-playbook playbooks/10-option-a-svsan.yml -e storage_backend=svsan
+#   ansible-playbook playbooks/10-storage-svsan.yml -e storage_backend=svsan
 #
 # This play stands the storage layer up on its own, from a provisioned node to
 # running VSAs. The VSA pool is a dedicated logical volume rather than the whole

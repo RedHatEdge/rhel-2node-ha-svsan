@@ -55,20 +55,42 @@ step, and it is resolved by reading the MACs out of firmware rather than from a
 running system.
 
 ```
+0. decide the two networks             on paper, before anything else
 1. accounts and subscriptions          you, on the web
 2. a build host                        one RHEL 9 machine or VM
-3. read the MACs out of BIOS/BMC       no OS needed
-4. write them into bootc/config.toml
+3. read the MACs out of BIOS/BMC       no OS needed — the machines have no OS yet
+4. write MACs and addresses into bootc/config.toml
 5. build the image, then the ISO       on the build host
 6. install both nodes from that ISO
-7. make discover                       now the nodes can describe themselves
-8. make substrate ... onwards          the rest of this guide
+7. fill in the inventory               copy the .example files, edit them
+8. make discover                       the nodes describe their own hardware
+9. the lettered sections below         cluster, storage, guests
 ```
 
-Steps 3 and 7 look similar but are not. Step 3 is you, reading two MACs off a
-screen so the installer can tell the machines apart. Step 7 is the cluster
-recording every disk and interface by an identifier that cannot move — which is
-a different job, done once there is an OS to ask.
+Steps 3 and 8 look similar but are not. Step 3 is you, reading two MACs off a
+screen so the installer can tell the two machines apart. Step 8 is the cluster
+recording every disk and interface by an identifier that cannot move — a
+different job, and only possible once there is an OS to ask.
+
+### 0. Decide the two networks first
+
+| segment | subnet | carries |
+|---|---|---|
+| management | 172.16.7.0/24 (example) | corosync ring0, host and VSA management, witness |
+| storage | 172.18.8.0/24 (example) | corosync ring1, mirror, iSCSI |
+
+Use your own subnets — the examples above are what this was built on, and the
+inventory ships with them as defaults, so reusing them saves editing.
+
+**The storage segment must have no DHCP server, no gateway and no DNS.**
+
+This is not tidiness. A pristine VSA takes DHCP on *every* interface and treats
+each as management. If the storage segment answers DHCP, the appliance acquires a
+second default route, and which one wins is a race. On two identical hosts running
+the identical play, one appliance completed setup and the other could not reach
+the network it needed. The build brings the appliances up on management first for
+that reason; a storage segment handing out leases is also worth avoiding on its
+own merits.
 
 ### 1. Accounts you will need
 
@@ -158,15 +180,51 @@ installs unattended. Nothing to answer.
 If you PXE boot rather than using media: **most BIOSes ship with the network
 stack disabled**, and it has to be turned on before the machine will PXE at all.
 
-### 7. Now let the nodes describe themselves
+### 7. Fill in the inventory
+
+Everything the playbooks need about *your* environment lives in three files. Each
+ships as a `.example` — copy it, then edit. Nothing is generated for you at this
+point except the per-node hardware facts in step 8.
 
 ```
-cp inventory/hosts.yml.example inventory/hosts.yml     # put your addresses in
+cp inventory/hosts.yml.example          inventory/hosts.yml
+cp inventory/group_vars/all.yml.example inventory/group_vars/all.yml
+```
+
+**`inventory/hosts.yml`** — which machines, and how Ansible reaches them. Set
+`ansible_host` for `node1`, `node2` and the arbiter to the management addresses
+you chose in step 0.
+
+**`inventory/group_vars/all.yml`** — everything else, and the one file worth
+reading top to bottom. Anything marked `REPLACE` must change; the rest has a
+working default. The values that matter most:
+
+| | |
+|---|---|
+| `lan_gateway`, `lan_dns` | your management network |
+| `repl_network` | your storage segment |
+| `redfish_user`, `redfish_password` | BMC credentials — fencing does not work without them |
+| `admin_ssh_key` | your public key, or you cannot log in |
+| `admin_password_hash` | needed for Cockpit, which authenticates via PAM |
+| `bootc_image` | where the nodes pull their OS from |
+
+The real `hosts.yml` and `all.yml` are gitignored, so your addresses and
+credentials stay out of version control while the `.example` files remain as the
+template.
+
+You do **not** create `inventory/host_vars/` by hand. The examples there show
+what the files look like, but step 8 generates the real ones from the hardware
+itself, which is more reliable than transcribing MAC addresses.
+
+### 8. Now let the nodes describe themselves
+
+```
 make discover
 ```
 
 This runs against each node and writes `inventory/host_vars/<node>.yml`,
-recording disks by `/dev/disk/by-id/` and interfaces by MAC.
+recording disks by `/dev/disk/by-id/` and interfaces by MAC — overwriting
+anything already there, which is why step 7 says not to write them yourself.
 
 **This is not optional and it is easy to skip**, because the rest of the guide
 does not obviously fail without it — it fails later, on the wrong disk. Kernel
@@ -175,14 +233,19 @@ swap, and interface names shift when firmware changes. Anything written into
 configuration has to be pinned to something that cannot move, and this is the
 step that captures it.
 
-Read the generated files before continuing. If a node picked the wrong disk as
-its storage device, now is the moment to notice — not after it has been
-overwritten.
+Read the generated files before continuing:
 
-### 8. Continue
+```
+cat inventory/host_vars/node1.yml
+```
 
-From here the rest of this guide applies, beginning with the networks section
-below.
+Check `storage_device` is the disk you intend to give to storage and **not** the
+OS disk, and that `control_mac` and `repl_mac` are the right way round. If a node
+picked wrong, correct the file now — not after it has been overwritten.
+
+### 9. Continue
+
+From here, work through the lettered sections below in order.
 
 ---
 
@@ -248,26 +311,7 @@ design, and a dry run tells you which tasks would fire before they do.
 
 ---
 
-## A. Networks — get this right before anything else
-
-| segment | subnet | carries |
-|---|---|---|
-| management / VLAN 12 | 172.16.7.0/24 | corosync ring0, host and VSA management, witness |
-| storage / VLAN 18 | 172.18.8.0/24 | corosync ring1, mirror, iSCSI |
-
-**The storage VLAN must have no DHCP server, no gateway and no DNS.**
-
-This is not tidiness. A pristine VSA takes DHCP on *every* interface and treats
-each as management. If the storage segment answers DHCP, the appliance acquires a
-second default route, and which one wins is a race. On two identical hosts running
-the identical play, one appliance completed setup and the other could not reach
-the network it needed. The build brings the appliances up on management first for
-that reason; a storage segment handing out leases is also worth avoiding on its
-own merits.
-
----
-
-## B. Install the two nodes
+## A. Install the two nodes
 
 Covered in Stage 0 steps 5 and 6 — this section is the detail behind them.
 
@@ -298,7 +342,7 @@ token is the right credential here — a node never needs to push.
 
 Public repository: skip this, no credential needed.
 
-## C. Cluster, quorum and fencing
+## B. Cluster, quorum and fencing
 
 ```
 make substrate
@@ -314,7 +358,7 @@ pcs quorum status          # Total votes: 3
 pcs stonith fence node2    # must actually power-cycle it
 ```
 
-## D. The witness
+## C. The witness
 
 ```
 make nsh-image ZIP=~/Downloads/svsan_6-7_plugin_ova.zip
@@ -335,7 +379,7 @@ systems share a failure domain and partition identically.
 ss -tlnp | grep 4174       # smclusterd listening
 ```
 
-## E. Appliance image and first boot
+## D. Appliance image and first boot
 
 ```
 make vsa-image ZIP=~/Downloads/svsan_6-7_windows_installer_plus_powershell.zip
@@ -343,13 +387,12 @@ make svsan
 ```
 
 `make svsan` passes `svsan_attach_san_nic=false` deliberately — the appliances come
-up on **management only**, for the DHCP reason in section A.
+up on **management only**, for the DHCP reason in Stage 0 step 0.
 
-The appliances come up on **management only** at this stage, for the DHCP reason
-in section A. Their MACs are set from inventory rather than generated, so each
+The appliances come up on **management only** at this stage, for the DHCP reason in Stage 0 step 0. Their MACs are set from inventory rather than generated, so each
 appliance keeps a stable identity across rebuilds.
 
-## F. The wizard — per appliance
+## E. The wizard — per appliance
 
 Find them with `virsh -c qemu:///system net-dhcp-leases default`, then browse to
 `https://<mgmt-ip>/`, **`admin` / `password`**.
@@ -364,7 +407,7 @@ Find them with `virsh -c qemu:///system net-dhcp-leases default`, then browse to
 
 Mirroring becomes available once the wizard completes.
 
-## G. Snapshot — before anything else
+## F. Snapshot — before anything else
 
 ```
 make vsa-snapshot
@@ -374,7 +417,7 @@ make vsa-snapshot
 snapshot taken after a mirror exists carries that mirror's metadata, so restoring
 it brings back a target whose backing store no longer exists.
 
-## H. Storage NIC
+## G. Storage NIC
 
 ```
 make svsan-attach-san
@@ -397,13 +440,13 @@ And **Interface 0**: Management **and** iSCSI ticked, Mirror Traffic Policy
 replication off the store LAN, and that is wrong: it removes the mirror's second
 path, which StorMagic's own split-brain guidance says to keep. Placement is
 expressed by `Preferred`/`Failover`, not by availability. Host iSCSI is kept off
-the store LAN separately, in section L.
+the store LAN separately — see Stage 0 step 0.
 
 If an appliance ever loses a NIC, the logical interface is disabled and its device
 binding cleared. When re-enabling it, set the Assigned Network Device explicitly —
 check that column shows the storage MAC and not the management one.
 
-## I. Pools
+## H. Pools
 
 **Pools → Create Pool** on each: name **`pool1`** — identical on both, because a
 mirrored target is created by naming the remote pool — RAID level **JBOD**, on the
@@ -412,7 +455,7 @@ mirrored target is created by naming the remote pool — RAID level **JBOD**, on
 JBOD is right: one data disk per node, and redundancy comes from the network
 mirror, not from local RAID.
 
-## J. Witness and targets
+## I. Witness and targets
 
 Discovery is **automatic** — the appliances find each other and the witness with
 no configuration.
@@ -434,7 +477,7 @@ CREATE stays greyed until it is set.
 `Majority` is what gives the mirror split-brain protection. Without a witness the
 only choice is `Up`, in which a plex stays online whenever it is healthy.
 
-## K. Access control
+## J. Access control
 
 **Initiators → Create Initiator**, twice, OS Type **Linux**:
 
@@ -450,7 +493,7 @@ running, or it cannot take over. A target with an empty ACL accepts nobody and
 says so only as an informational event, so from the host it looks like a network
 fault.
 
-## L. Present to the hosts
+## K. Present to the hosts
 
 ```
 make svsan-attach
@@ -480,7 +523,7 @@ per-device. Detection is the larger half of the wait.
 multipath -ll        # /dev/mapper/pos and /dev/mapper/pgsql, 2 paths each
 ```
 
-## M. Guests
+## L. Guests
 
 ```
 make guests
@@ -507,7 +550,7 @@ healthy:
 - **Ports 49152-49215** open, or migration authenticates, starts, then fails with
   "no route to host"
 
-## N. Operator access — Cockpit
+## M. Operator access — Cockpit
 
 ```
 make admin
@@ -537,7 +580,7 @@ Three things about this are easy to get wrong:
 Change the demo password before this touches anything real — see
 `roles/common_base/defaults/main.yml`.
 
-## O. Verify
+## N. Verify
 
 ```
 pcs status                                  # both guests Started, no failures
