@@ -1,14 +1,10 @@
 {#
   VSA domain definition.
 
-  The MAC on the FIRST interface is not cosmetic. The appliance derives its
-  Hardware ID — the serial StorMagic licences against — directly from it:
-
-      MAC 52:54:00:53:01:01  ->  Hardware ID 525400530101
-
-  Verified on 6.7.GA.54690. Rebuild the VSA with the same MAC and it comes back
-  as the same appliance; leave the MAC generated and each rebuild produces a new
-  identity, which is rarely what you want.
+  The MAC on the FIRST interface is not cosmetic: the appliance takes its
+  identity from it. Rebuild the VSA with the same MAC and it comes back as the
+  same appliance; leave the MAC generated and each rebuild produces a new
+  identity, which is rarely what you want. Verified on 6.7.GA.54690.
 
   PCI slots are pinned too, so Interface 0 stays management and Interface 1
   stays SAN regardless of how libvirt orders devices.
@@ -59,7 +55,7 @@
     </disk>
 {% endif %}
 
-    {# Interface 0 — management. THIS MAC BECOMES THE LICENCE SERIAL. #}
+    {# Interface 0 — management. Pinned: this is the appliance's identity. #}
     <interface type='{{ 'bridge' if svsan_vsa_mgmt_bridge is defined else 'network' }}'>
       <mac address='{{ svsan_vsa_mgmt_mac }}'/>
 {% if svsan_vsa_mgmt_bridge is defined %}

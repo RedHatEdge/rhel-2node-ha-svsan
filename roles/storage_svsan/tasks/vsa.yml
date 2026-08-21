@@ -149,9 +149,9 @@
     state: directory
     mode: "0711"
 
-# The appliance carries its licence activation in its own config partition, so
-# copying an ACTIVATED image preserves the licence — provided the MAC, and
-# therefore the serial, is unchanged. That is why the MACs are pinned.
+# The appliance keeps its configuration in its own config partition, so copying
+# a configured image preserves that state — provided its identity is unchanged.
+# That is why the MACs are pinned rather than generated.
 - name: Place the appliance boot image
   ansible.builtin.copy:
     src: "{{ svsan_vsa_image_src }}"
@@ -194,9 +194,8 @@
   register: _domxml
 
 # Defined from a pinned template rather than virt-install, because the
-# management MAC determines the appliance's Hardware ID and therefore which
-# licence applies. virt-install generates a random MAC on every run and would
-# silently re-license the VSA each time it was rebuilt.
+# management MAC is the appliance's identity. virt-install generates a random
+# MAC on every run, so a rebuilt VSA would come back as a different appliance.
 - name: Define the VSA domain
   ansible.builtin.command: "virsh define /etc/libvirt/qemu/{{ svsan_vsa_name }}.xml.staged"
   when: _dom.rc != 0 or _domxml.changed
@@ -214,13 +213,13 @@
   changed_when: "'started' in _start.stdout"
   failed_when: _start.rc != 0 and 'already active' not in _start.stderr
 
-- name: Confirm the appliance serial matches the pinned MAC
+- name: Confirm the appliance came up on its pinned MAC
   ansible.builtin.debug:
     msg: >
-      {{ svsan_vsa_name }} management MAC {{ svsan_vsa_mgmt_mac }} must yield
-      Hardware ID {{ svsan_vsa_mgmt_mac | replace(':','') | upper }}. Verify on
-      the console before applying a licence key — a mismatch means the licence
-      binds to the wrong identity and will not survive a rebuild.
+      {{ svsan_vsa_name }} management interface should be
+      {{ svsan_vsa_mgmt_mac }}. Check this before configuring the appliance: if
+      it differs, the appliance has a different identity from the one the
+      inventory describes and will not come back the same after a rebuild.
 
 - name: Wait for the VSA management interface
   ansible.builtin.wait_for:

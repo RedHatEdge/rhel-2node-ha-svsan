@@ -82,8 +82,8 @@ guest_image_url: https://cloud-images.ubuntu.com/jammy/current/jammy-server-clou
 guest_image_local: "{{ playbook_dir }}/../images/jammy-server-cloudimg-amd64.img"
 
 # ═══ StorMagic appliance ═══════════════════════════════════════════════════
-# The appliance derives its serial number from the MAC of its first interface,
-# so setting these explicitly keeps its identity stable across rebuilds.
+# Setting these explicitly keeps each appliance's identity stable across
+# rebuilds, rather than letting libvirt generate a new MAC each time.
 # Any locally-administered MACs will do; these are fine to leave as they are.
 svsan_vsa_macs:
   node1: { mgmt: "52:54:00:53:01:01", san: "52:54:00:53:01:02" }
