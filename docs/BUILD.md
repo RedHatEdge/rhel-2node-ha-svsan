@@ -194,6 +194,17 @@ Before it builds anything the script checks the things that would otherwise
 waste a full build: entitlements, that you are logged in to both registries,
 that `REGISTRY` is set, and that the SSH key placeholder is gone.
 
+The build prints one error you can ignore:
+
+```
+System has not been booted with systemd as init system (PID 1). Can't operate.
+Error in POSTTRANS scriptlet in rpm package pcs
+```
+
+`pcs` tries to talk to systemd when it installs, and nothing is running as PID 1
+inside a build container. The package installs correctly and the service starts
+normally on a booted node. The build does not stop, and neither should you.
+
 The result is an installer ISO that installs either node. Write it to a USB stick
 or attach it through the BMC's virtual media.
 

@@ -140,7 +140,10 @@ if [ "$ISO" = 1 ]; then
 
   mkdir -p output
   echo ">> building installer ISO"
-  sudo podman run --rm -it --privileged --pull=newer \
+  # -t only when stdin is a terminal: with it, running build.sh from a script
+  # or a non-interactive ssh fails with "the input device is not a TTY".
+  TTY_ARG=(); [ -t 0 ] && TTY_ARG=(-it)
+  sudo podman run --rm "${TTY_ARG[@]}" --privileged --pull=newer \
     --security-opt label=type:unconfined_t \
     -v "$(pwd)/config.toml:/config.toml:ro" \
     -v "$(pwd)/output:/output" \
