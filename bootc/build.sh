@@ -75,6 +75,33 @@ if [ "$PUSH" = 1 ]; then
   fi
 fi
 
+# --- config sanity ----------------------------------------------------------
+# Check this BEFORE the build, not after: the build takes minutes and --push
+# publishes the result, so a placeholder caught at the end has already cost you
+# a wasted build and a useless image in your registry.
+if grep -qE 'REPLACE-WITH-YOUR-PUBLIC-KEY|PASTE-YOUR-SSH-PUBLIC-KEY-HERE' config.toml; then
+  cat <<'EOF'
+!! bootc/config.toml still has the SSH public key placeholder.
+
+   Replace it with your own key -- an image you cannot log into is no use:
+
+     ssh-keygen -y -f ~/.ssh/id_ed25519      # prints your public key
+EOF
+  exit 1
+fi
+
+if [ "$PUSH" = 1 ] && [ "${REGISTRY}" = "quay.io/your-org" ]; then
+  cat <<EOF
+!! REGISTRY is still the placeholder "quay.io/your-org", so there is nowhere
+   to push. Set it to your own namespace:
+
+     REGISTRY=quay.io/<your-namespace> ./build.sh --push --iso
+
+   IMAGE (default "${IMAGE}") and TAG (default "${TAG}") override the same way.
+EOF
+  exit 1
+fi
+
 # --- build ------------------------------------------------------------------
 echo ">> building ${REF}"
 podman build "${SECRET_ARGS[@]}" -t "${REF}" -f Containerfile .
@@ -105,9 +132,6 @@ fi
 
 # --- iso --------------------------------------------------------------------
 if [ "$ISO" = 1 ]; then
-  grep -q 'PASTE-YOUR-SSH-PUBLIC-KEY-HERE' config.toml && {
-    echo "!! set your SSH public key in bootc/config.toml first"; exit 1; }
-
   # Without --push the image only exists in local container storage, so tell
   # the builder to read it from there rather than trying to pull it. No
   # registry is needed just to produce installation media.

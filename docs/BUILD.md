@@ -167,10 +167,32 @@ you cannot log into is no use.
 
 ### 5. Build the image and the ISO
 
+`build.sh` needs to know where to push. Set `REGISTRY` to your own namespace —
+it has no sensible default and the script stops rather than guess:
+
 ```
 cd bootc
+REGISTRY=quay.io/<your-namespace> ./build.sh --push --iso
+```
+
+`IMAGE` (default `store-node`) and `TAG` (default `latest`) override the same
+way, which is also how you build a second image without disturbing one already
+in use:
+
+```
+REGISTRY=quay.io/<your-namespace> IMAGE=store-node-test ./build.sh --push --iso
+```
+
+Export them instead if you would rather not repeat them:
+
+```
+export REGISTRY=quay.io/<your-namespace>
 ./build.sh --push --iso
 ```
+
+Before it builds anything the script checks the things that would otherwise
+waste a full build: entitlements, that you are logged in to both registries,
+that `REGISTRY` is set, and that the SSH key placeholder is gone.
 
 The result is an installer ISO that installs either node. Write it to a USB stick
 or attach it through the BMC's virtual media.
