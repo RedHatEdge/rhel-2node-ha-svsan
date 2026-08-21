@@ -139,6 +139,20 @@ if [ "$ISO" = 1 ]; then
   [ "$PUSH" = 1 ] || LOCAL_ARG=(--local)
 
   mkdir -p output
+  # bootc-image-builder runs as root and reads root's container storage, but the
+  # image was just built into the invoking user's storage. Recent versions no
+  # longer pull to cover the gap -- they fail with "image not known" -- so put
+  # the image where the builder will actually look for it.
+  if ! sudo podman image exists "${REF}" 2>/dev/null; then
+    if [ "$PUSH" = 1 ]; then
+      echo ">> copying ${REF} into root storage (pulling what we just pushed)"
+      sudo podman pull "${REF}"
+    else
+      echo ">> copying ${REF} into root storage (no push, so streaming it across)"
+      podman save "${REF}" | sudo podman load
+    fi
+  fi
+
   echo ">> building installer ISO"
   # -t only when stdin is a terminal: with it, running build.sh from a script
   # or a non-interactive ssh fails with "the input device is not a TTY".
