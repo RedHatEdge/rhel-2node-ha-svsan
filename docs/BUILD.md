@@ -482,13 +482,37 @@ stable identity across rebuilds.
 Find them with `virsh -c qemu:///system net-dhcp-leases default`, then browse to
 `https://<mgmt-ip>/`, **`admin` / `password`**.
 
-1. **License Agreement** — accept
-2. **Before You Begin** — Next
-3. **Activate** — **mandatory**, the wizard will not advance past it.
-   Follow the prompts.
-4. **Identify** — hostname `vsa1` / `vsa2`, domain **blank**
-5. **Password** — `<VSA-ADMIN-PASSWORD>`
-6. **Finish**
+The wizard has six steps, listed down the left as you go.
+
+**1. License Agreement** — tick the box, then NEXT. NEXT stays disabled until
+you do.
+
+![The wizard's License Agreement step](images/f1-license-agreement.png)
+
+**2. Before You Begin** — informational. NEXT.
+
+![The Before You Begin step](images/f2-before-you-begin.png)
+
+**3. Activate** — this one stops people. It is **mandatory**: the wizard will
+not advance past it, and NEXT with an empty key field simply returns you to the
+same screen with no error. Read the panel carefully — the wording about using an
+evaluation licence "and then activate it later on" sounds like the step is
+optional, and it is not.
+
+Two routes, both on this page:
+
+- **Online** — paste the key your vendor gave you and press CONNECT. Needs
+  outbound internet from the appliance; there is a proxy checkbox if you use one.
+- **Offline** — your vendor issues you an activation file, which you upload with
+  CHOOSE FILE. The page shows the identifier they will ask for.
+
+![The Activate step, with online and offline routes](images/f3-activate.png)
+
+**4. Identify** — hostname `vsa1` / `vsa2`, domain **blank**
+
+**5. Password** — set the appliance admin password
+
+**6. Finish**
 
 Mirroring becomes available once the wizard completes.
 
@@ -521,6 +545,22 @@ Then per appliance, **Network → Interface 1**:
 And **Interface 0**: Management **and** iSCSI ticked, Mirror Traffic Policy
 **Failover**, "Enable on all Targets" ticked.
 
+**Network → Interfaces** afterwards should show both, with DHCP off on the
+storage interface and each bound to the right device:
+
+![Both appliance interfaces after configuration](images/h1-network-interfaces.png)
+
+Click an interface to check it. The storage one is where the detail matters —
+Management unticked, **iSCSI ticked**, **Mirror Traffic Policy `Preferred`**,
+and the Assigned Network Device ending `:02`:
+
+![The storage interface, showing iSCSI enabled and Mirror Traffic Policy Preferred](images/h2-storage-interface.png)
+
+The management interface keeps iSCSI as well, at `Failover` rather than
+`Preferred` — this is the pair of settings that expresses placement:
+
+![The management interface, iSCSI at Failover](images/h3-management-interface.png)
+
 **Both interfaces keep iSCSI.** It is tempting to untick it on management to keep
 replication off the store LAN, and that is wrong: it removes the mirror's second
 path, which StorMagic's own split-brain guidance says to keep. Placement is
@@ -539,6 +579,11 @@ mirrored target is created by naming the remote pool — RAID level **JBOD**, on
 
 JBOD is right: one data disk per node, and redundancy comes from the network
 mirror, not from local RAID.
+
+**Pools** then shows the pool Online with its free space — the same on both
+appliances:
+
+![The pool, Online, on one appliance](images/i1-pools.png)
 
 ## J. Witness and targets
 
@@ -562,6 +607,13 @@ CREATE stays greyed until it is set.
 `Majority` is what gives the mirror split-brain protection. Without a witness the
 only choice is `Up`, in which a plex stays online whenever it is healthy.
 
+Both targets should end up Online, each listing **both** appliances as
+`Synchronized` and the witness as `[Online]`. Anything else here — one plex
+missing, a witness that is not Online — means the mirror is not protected, and
+it is worth stopping to fix before going further:
+
+![Both targets Online, both plexes Synchronized, witness Online](images/j1-targets.png)
+
 ## K. Access control
 
 **Initiators → Create Initiator**, twice, OS Type **Linux**:
@@ -577,6 +629,14 @@ Both hosts on both targets — a host needs access to the target it is not norma
 running, or it cannot take over. A target with an empty ACL accepts nobody and
 says so only as an informational event, so from the host it looks like a network
 fault.
+
+Once both are added and the hosts have logged in, each initiator shows 2 targets
+and 2 sessions:
+
+![Both initiators, each with two targets and two sessions](images/k1-initiators.png)
+
+The IQN prefix comes from `iscsi_initiator_prefix`, so yours will differ from the
+screenshot unless you keep the default.
 
 ## L. Present to the hosts
 
@@ -657,6 +717,11 @@ file looks identical to not setting it at all.
 
 **`org.libvirt` must be on the system bus**, or Cockpit shows no virtual machines
 regardless of how healthy libvirt is.
+
+On the appliance side, a finished build looks like this — status Normal, the pool
+Online, and no outstanding tasks:
+
+![An appliance in its finished state](images/n1-home-healthy.png)
 
 ---
 
