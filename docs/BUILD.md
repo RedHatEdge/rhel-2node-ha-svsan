@@ -40,6 +40,9 @@ wizard.
 
 ---
 
+> Prefer to drive Ansible yourself rather than through `make`? Every target and
+> its equivalent command is in the appendix at the end.
+
 ## Stage 0 — before you touch the servers
 
 If you have two machines out of their boxes and nothing else, start here. This
@@ -249,68 +252,6 @@ From here, work through the lettered sections below in order.
 
 ---
 
-## Using Ansible directly instead of make
-
-`make` is a thin wrapper. Every target runs an ordinary playbook, and you can run
-them yourself if you prefer — nothing in this repository requires make.
-
-What the wrapper does add is worth knowing before you skip it:
-
-- **A pinned toolchain.** `make venv` builds a virtualenv from `requirements.txt`
-  (`ansible-core>=2.16,<2.20`) and installs the collections into `./collections`,
-  deliberately never touching system Python. Run playbooks with a distro Ansible
-  and you get whatever version it ships, against collections that may not match.
-- **The flags that matter.** Several playbooks behave differently depending on
-  `storage_backend`, and `00-substrate.yml` reconfigures host networking based on
-  it. Running that one with the wrong value against a live cluster tears down the
-  storage bridge and drops every path — while reporting success. `make substrate`
-  refuses to run without an explicit backend for exactly that reason. If you call
-  the playbook directly, pass it yourself and pass it correctly.
-
-Activate the virtualenv first so you get the pinned Ansible:
-
-```
-make venv                      # once
-source .venv/bin/activate
-```
-
-Run from the repository root — `ansible.cfg` there supplies the inventory path,
-the roles path and the collections path, so the commands below need no `-i`.
-
-Then each target maps to:
-
-| make | ansible-playbook |
-|---|---|
-| `make discover` | `ansible-playbook playbooks/01-discover.yml` |
-| `make substrate` | `ansible-playbook playbooks/00-substrate.yml -e storage_backend=svsan -e fence_backend=redfish` |
-| `make admin` | `… playbooks/00-substrate.yml -e storage_backend=svsan -e fence_backend=redfish --tags admin` |
-| `make witness` | `… playbooks/10-storage-svsan.yml -e storage_backend=svsan --limit arbiter` |
-| `make svsan` | `… playbooks/10-storage-svsan.yml -e storage_backend=svsan -e svsan_attach_san_nic=false` |
-| `make svsan-attach-san` | `… playbooks/10-storage-svsan.yml -e storage_backend=svsan -e svsan_attach_san_nic=true --limit cluster` |
-| `make svsan-attach` | `… playbooks/11-present-targets.yml -e storage_backend=svsan` |
-| `make svsan-tune` | `… playbooks/12-failover-tuning.yml -e storage_backend=svsan` |
-| `make guests` | `… playbooks/30-guests.yml -e storage_backend=svsan` |
-
-`FENCE` defaults to `redfish`; override with `make substrate FENCE=ipmilan` or by
-changing `-e fence_backend=`.
-
-The image build is not Ansible at all — `bootc/build.sh` is a shell script and is
-run directly either way.
-
-Useful additions when running playbooks by hand:
-
-```
---check --diff        # dry run, show what would change
---limit node1         # one host
---tags admin          # one part of a play
--v                    # or -vvv when something is not doing what you expect
-```
-
-`--check` is worth knowing about: several plays in here are destructive by
-design, and a dry run tells you which tasks would fire before they do.
-
----
-
 ## A. Install the two nodes
 
 Covered in Stage 0 steps 5 and 6 — this section is the detail behind them.
@@ -417,10 +358,11 @@ make svsan
 ```
 
 `make svsan` passes `svsan_attach_san_nic=false` deliberately — the appliances come
-up on **management only**, for the DHCP reason in Stage 0 step 0.
+up on **management only** at this stage, for the DHCP reason in Stage 0 step 0. The
+storage NIC gets attached in section H, once the wizard is done.
 
-The appliances come up on **management only** at this stage, for the DHCP reason in Stage 0 step 0. Their MACs are set from inventory rather than generated, so each
-appliance keeps a stable identity across rebuilds.
+Their MACs are set from inventory rather than generated, so each appliance keeps a
+stable identity across rebuilds.
 
 ## F. The wizard — per appliance
 
@@ -537,9 +479,6 @@ silently orphaned — the domain runs, `virsh domiflist` still reports the inten
 bridge, and the NIC is connected to nothing. It presents as a DHCP or storage
 failure and is invisible from either. Nothing in libvirt or Pacemaker detects it.
 
-```
-```
-
 `svsan-attach` discovers, logs in, binds multipath aliases, and **discards node
 records for portals outside the storage subnet** — `sendtargets` advertises every
 portal a target is on, including management, so without this the host runs iSCSI
@@ -574,9 +513,8 @@ healthy:
 - **SSH host keys** between the nodes, as root
 - **A unique libvirt host UUID.** The Simply NUC ships the *same* DMI system UUID
   in firmware on every unit, so libvirt sees a single host and declines to migrate. `machine-id` is
-  correctly unique, so `host_uuid_source = "machine-id"` fixes it. On identical
-  hardware deployed from one image — the several thousand-store model exactly — every site
-  would hit this.
+  correctly unique, so `host_uuid_source = "machine-id"` fixes it. Anywhere identical
+  hardware is deployed from a single image, every site hits this the same way.
 - **Ports 49152-49215** open, or migration authenticates, starts, then fails with
   "no route to host"
 
@@ -591,6 +529,9 @@ busctl --system list | grep org.libvirt     # Cockpit can see the guests
 virsh capabilities | grep -A1 '<uuid>'      # MUST differ between the two hosts
 ```
 
+Run these from the hosts, not from a workstation — the storage segment is not
+routed off the nodes.
+
 Two of these are worth understanding rather than just running.
 
 **The host UUID must differ between nodes.** Many small-form-factor machines ship
@@ -603,8 +544,6 @@ file looks identical to not setting it at all.
 
 **`org.libvirt` must be on the system bus**, or Cockpit shows no virtual machines
 regardless of how healthy libvirt is.
-
-From the hosts, never from a workstation — the storage segment is not routed.
 
 ---
 
@@ -634,3 +573,64 @@ compare them.
 | VSA offline | 10.3 s |
 | Host offline, fenced | 20.1 s, zero transactions lost |
 
+---
+
+## Appendix — running the playbooks without make
+
+`make` is a thin wrapper. Every target runs an ordinary playbook, and you can run
+them yourself if you prefer — nothing in this repository requires make.
+
+What the wrapper does add is worth knowing before you skip it:
+
+- **A pinned toolchain.** `make venv` builds a virtualenv from `requirements.txt`
+  (`ansible-core>=2.16,<2.20`) and installs the collections into `./collections`,
+  deliberately never touching system Python. Run playbooks with a distro Ansible
+  and you get whatever version it ships, against collections that may not match.
+- **The extra-vars.** `00-substrate.yml` decides how the storage NIC is attached
+  from `storage_backend`, and the make targets pin it to `svsan` so you cannot get
+  it wrong. Run that playbook by hand without it and the variable falls back to a
+  value that leaves the storage NIC unbridged — the host then cannot reach the
+  appliance running on itself, which presents as a storage failure rather than a
+  configuration one. Pass it.
+
+Activate the virtualenv first so you get the pinned Ansible:
+
+```
+make venv                      # once
+source .venv/bin/activate
+```
+
+Run from the repository root — `ansible.cfg` there supplies the inventory path,
+the roles path and the collections path, so the commands below need no `-i`.
+
+Then each target maps to:
+
+| make | ansible-playbook |
+|---|---|
+| `make discover` | `ansible-playbook playbooks/01-discover.yml` |
+| `make substrate` | `ansible-playbook playbooks/00-substrate.yml -e storage_backend=svsan -e fence_backend=redfish` |
+| `make admin` | `… playbooks/00-substrate.yml -e storage_backend=svsan -e fence_backend=redfish --tags admin` |
+| `make witness` | `… playbooks/10-storage-svsan.yml -e storage_backend=svsan --limit arbiter` |
+| `make svsan` | `… playbooks/10-storage-svsan.yml -e storage_backend=svsan -e svsan_attach_san_nic=false` |
+| `make svsan-attach-san` | `… playbooks/10-storage-svsan.yml -e storage_backend=svsan -e svsan_attach_san_nic=true --limit cluster` |
+| `make svsan-attach` | `… playbooks/11-present-targets.yml -e storage_backend=svsan` |
+| `make svsan-tune` | `… playbooks/12-failover-tuning.yml -e storage_backend=svsan` |
+| `make guests` | `… playbooks/30-guests.yml -e storage_backend=svsan` |
+
+`FENCE` defaults to `redfish`; override with `make substrate FENCE=ipmilan` or by
+changing `-e fence_backend=`.
+
+The image build is not Ansible at all — `bootc/build.sh` is a shell script and is
+run directly either way.
+
+Useful additions when running playbooks by hand:
+
+```
+--check --diff        # dry run, show what would change
+--limit node1         # one host
+--tags admin          # one part of a play
+-v                    # or -vvv when something is not doing what you expect
+```
+
+`--check` is worth knowing about: several plays in here are destructive by
+design, and a dry run tells you which tasks would fire before they do.
