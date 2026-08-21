@@ -1,16 +1,29 @@
 ---
-# Replace the three addresses. Names can stay as they are — the roles use them.
+# Copy this to inventory/hosts.yml and put your own addresses in it:
+#
+#   cp inventory/hosts.yml.example inventory/hosts.yml
+#
+# The addresses below match the example MAC table in bootc/config.toml, so if
+# you changed the addresses there, change them here to match. These are the
+# addresses the nodes install with -- Ansible has to reach them at the same
+# place the kickstart put them.
+#
+# Names can stay as they are; the roles use them.
 all:
   children:
 
     cluster:
       hosts:
         node1:
-          ansible_host: 172.16.7.11   # node1 management address
+          ansible_host: 172.16.7.10   # node1 management address
         node2:
-          ansible_host: 172.16.7.12   # node2 management address
+          ansible_host: 172.16.7.11   # node2 management address
       vars:
         ansible_user: root
+        # The key you created in Stage 0 step 4. SSH only tries ~/.ssh/id_*
+        # by itself, so a key with any other name has to be named here or
+        # every connection fails with "Permission denied (publickey)".
+        ansible_ssh_private_key_file: ~/.ssh/store-cluster
 
     # A third machine, off the pair, holding the deciding quorum vote.
     # Small: 1 vCPU and 1 GB is enough. It must NOT be one of the two nodes.
@@ -20,3 +33,4 @@ all:
           ansible_host: 172.16.7.20   # arbiter management address
       vars:
         ansible_user: root
+        ansible_ssh_private_key_file: ~/.ssh/store-cluster

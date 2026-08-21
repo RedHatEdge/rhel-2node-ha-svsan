@@ -83,9 +83,22 @@ if grep -qE 'REPLACE-WITH-YOUR-PUBLIC-KEY|PASTE-YOUR-SSH-PUBLIC-KEY-HERE' config
   cat <<'EOF'
 !! bootc/config.toml still has the SSH public key placeholder.
 
-   Replace it with your own key -- an image you cannot log into is no use:
+   This key is what Ansible uses to reach the nodes after they install, so an
+   image without it is one you cannot log in to.
 
-     ssh-keygen -y -f ~/.ssh/id_ed25519      # prints your public key
+   If you already have a key, print the public half:
+
+     cat ~/.ssh/id_ed25519.pub
+
+   If you do not have one yet, create it first (empty passphrase, so Ansible
+   can use it unattended):
+
+     ssh-keygen -t ed25519 -C "$(whoami)@$(hostname)"
+
+   Then replace the placeholder line in bootc/config.toml with that one line:
+
+     KEY=$(cat ~/.ssh/id_ed25519.pub)
+     sed -i "s|^ssh-ed25519 AAAA\.\.\.REPLACE-WITH-YOUR-PUBLIC-KEY.*|${KEY}|" config.toml
 EOF
   exit 1
 fi

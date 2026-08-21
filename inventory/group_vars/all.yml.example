@@ -108,3 +108,23 @@ svsan_targets:
 os_mode: bootc
 node1_name: node1
 node2_name: node2
+
+# ═══ OPERATOR ACCESS ═══════════════════════════════════════════════════════
+#
+# 'make admin' creates the admin account and brings up Cockpit. An account
+# needs at least one of these two, and in practice wants both: the key is for
+# Ansible and ssh, the password hash is for Cockpit, which authenticates
+# through PAM and cannot use a key at all.
+
+# The PUBLIC half of the key you made in Stage 0 step 4 -- the contents of
+# ~/.ssh/store-cluster.pub, on one line. Leave empty to rely on the password
+# alone.
+admin_ssh_key: ""
+
+# Password hash for the admin account and for root. Generate your own:
+#
+#   mkpasswd --method=yescrypt
+#
+# Left unset, this falls back to a demo password that is published in this
+# repository. Set it to your own before the cluster is anything but a lab.
+# admin_password_hash: "$y$j9T$..."

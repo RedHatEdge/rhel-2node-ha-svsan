@@ -163,9 +163,83 @@ That table is what makes a single ISO able to install both machines: each one
 matches its own MACs on boot and takes the matching hostname and addresses.
 Nothing else distinguishes them, so this table has to be right.
 
-Set your SSH public key in the same file while you are there — the build refuses
-to proceed with the placeholder still in place, deliberately, because an image
-you cannot log into is no use.
+#### The SSH key, in the same file
+
+Further down `config.toml` is the key that gets written to `/root/.ssh/authorized_keys`
+on both nodes. It ships as a placeholder:
+
+```
+ssh-ed25519 AAAA...REPLACE-WITH-YOUR-PUBLIC-KEY... you@example.com
+```
+
+This is the key Ansible uses to reach the nodes, so it must be one held by
+whoever runs the playbooks — normally the build host itself.
+
+**Make a key for this cluster rather than reusing an existing one.** Giving it
+its own name keeps it separate from whatever else you already have, and means
+`ssh-keygen` cannot overwrite a key you still need — running it with the default
+path against an existing `~/.ssh/id_ed25519` will offer to replace it, and that
+is not a prompt you want to answer quickly:
+
+```
+ssh-keygen -t ed25519 -f ~/.ssh/store-cluster -C "store-cluster"
+```
+
+Leave the passphrase empty. Ansible has to use this key unattended, and a
+passphrase means loading it into an agent before every run.
+
+That writes two files. `~/.ssh/store-cluster` is the private half — it never
+leaves the build host. `~/.ssh/store-cluster.pub` is the one that goes in
+`config.toml`:
+
+```
+cat ~/.ssh/store-cluster.pub
+```
+
+Paste that single line over the placeholder, replacing it entirely, or do it
+without touching an editor:
+
+```
+KEY=$(cat ~/.ssh/store-cluster.pub)
+sed -i "s|^ssh-ed25519 AAAA\.\.\.REPLACE-WITH-YOUR-PUBLIC-KEY.*|${KEY}|" bootc/config.toml
+```
+
+Check it took, and that the key is one line and one line only:
+
+```
+grep -c '^ssh-' bootc/config.toml        # expect 1
+grep -q 'REPLACE-WITH-YOUR-PUBLIC-KEY' bootc/config.toml && echo "STILL A PLACEHOLDER"
+```
+
+A key split across two lines is the most common way this goes wrong, and it
+fails much later — at first Ansible connection, not at build time.
+
+**Because the key is not at the default path, tell Ansible where it is.** SSH
+only tries `~/.ssh/id_*` on its own, so a named key is ignored unless you point
+at it. `inventory/hosts.yml.example` carries the line, already set to this
+path — keep it when you make your own `hosts.yml`:
+
+```yaml
+        vars:
+          ansible_user: root
+          ansible_ssh_private_key_file: ~/.ssh/store-cluster
+```
+
+For plain `ssh` from the build host, either pass it each time with
+`ssh -i ~/.ssh/store-cluster root@<node>`, or add it once to `~/.ssh/config`:
+
+```
+Host node1 node2 qnetd1
+  User root
+  IdentityFile ~/.ssh/store-cluster
+```
+
+The build stops before doing any work if the placeholder is still in place, so a
+mistake here costs seconds rather than a finished image you cannot log in to.
+
+If you build on one machine and run Ansible from another, the key in
+`config.toml` has to be the one the *Ansible* host holds, or the playbooks will
+not be able to reach the nodes they just installed.
 
 ### 5. Build the image and the ISO
 
@@ -242,9 +316,13 @@ working default. The values that matter most:
 | `lan_gateway`, `lan_dns` | your management network |
 | `repl_network` | your storage segment |
 | `redfish_user`, `redfish_password` | BMC credentials — fencing does not work without them |
-| `admin_ssh_key` | your public key, or you cannot log in |
-| `admin_password_hash` | needed for Cockpit, which authenticates via PAM |
-| `bootc_image` | where the nodes pull their OS from |
+| `admin_ssh_key` | the contents of `~/.ssh/store-cluster.pub` — for Ansible and ssh |
+| `admin_password_hash` | needed for Cockpit, which authenticates via PAM and cannot use a key |
+
+The image the nodes run is not set here. It is fixed when the ISO is built, from
+the `REGISTRY`/`IMAGE`/`TAG` you built with in step 5 — that reference is handed
+to `bootc-image-builder` and embedded in the installer, so the nodes come up
+pointing at it. To move a node to a different image later, use `bootc switch`.
 
 The real `hosts.yml` and `all.yml` are gitignored, so your addresses and
 credentials stay out of version control while the `.example` files remain as the
