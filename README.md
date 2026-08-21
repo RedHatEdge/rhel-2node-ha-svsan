@@ -56,8 +56,8 @@ which a plex stays online whenever it is healthy. `Majority` is what gives the
 mirror split-brain protection, so plan for a witness from the start.
 
 The witness here runs as a **container** (`containers/nsh-witness`) on UBI9, built
-from StorMagic's own amd64 binaries. StorMagic also document an `el7` RPM; use
-whichever suits your fleet.
+from the amd64 binaries in a StorMagic package you supply. StorMagic also document
+an `el7` RPM — if you have one, prefer it.
 
 ## Requirements
 
@@ -68,7 +68,7 @@ whichever suits your fleet.
 | 2 × NICs per node | management and storage on separate segments |
 | The **Hyper-V** SvSAN package | for the appliance image — not the vSphere OVA |
 | A trial licence | see below |
-| A control node | with Ansible, `qemu-img`, `podman`, `7z` |
+| A control node | RHEL 9, subscribed — builds the image and runs Ansible. See Stage 0 |
 
 ### Getting the software
 
@@ -87,18 +87,29 @@ it expects configuration through a VMware Tools channel that KVM does not have.
 
 ## Build it
 
+**Starting from bare machines?** Read
+**[docs/BUILD.md](docs/BUILD.md)** first — Stage 0 covers the accounts, the build
+host, and the ordering, including the one awkward part: the installer identifies
+each machine by MAC address, so you need both MACs before you can build the ISO.
+
+Once the two nodes are installed and reachable:
+
 ```
-cp inventory/hosts.yml.example              inventory/hosts.yml
-cp inventory/host_vars/node1.yml.example    inventory/host_vars/node1.yml
-cp inventory/host_vars/node2.yml.example    inventory/host_vars/node2.yml
-cp inventory/group_vars/all.yml.example     inventory/group_vars/all.yml
-# work down each one — anything marked REPLACE has to change
+cp inventory/hosts.yml.example          inventory/hosts.yml
+cp inventory/group_vars/all.yml.example inventory/group_vars/all.yml
+# work down both — anything marked REPLACE has to change
+
+make discover             # each node records its own disks and NICs
 make substrate            # cluster, quorum, fencing
+make admin                # admin account and Cockpit on :9090
+
 make nsh-image ZIP=...    # build the witness container
 make witness              # deploy it to the arbiter
+
 make vsa-image ZIP=...    # convert the appliance image
 make svsan                # deploy the appliances (management only)
    ... appliance setup wizard, per appliance ...
+make vsa-snapshot         # snapshot now — before any pool or target exists
 make svsan-attach-san     # add the storage NIC
    ... pools, targets, ACLs ...
 make svsan-attach         # present the LUNs to the hosts
@@ -106,13 +117,19 @@ make svsan-tune           # failover timing
 make guests               # guests on the mirrored LUNs
 ```
 
-The order matters. Full walkthrough with the reasoning behind each step:
-**[docs/BUILD.md](docs/BUILD.md)**.
+The order matters, and `make discover` comes first for a reason: it pins every
+disk and interface to an identifier that cannot change on reboot. Skip it and the
+build works until something is renumbered, then writes to the wrong disk.
+
+You do **not** create `inventory/host_vars/` by hand — `make discover` generates
+those from the hardware. The `.example` files there show the shape only.
 
 Every value marked `REPLACE` has to be yours. The rest has a working default.
 
-## A note on the roles
+## Running it without make
 
-They are written to support either this appliance-based layer or direct block
-replication, and branch on `storage_backend`. This repository pins it to `svsan`,
-so the other branch never fires.
+`make` is a wrapper around ordinary playbooks. It pins the Ansible version in a
+virtualenv and passes the extra-vars that decide how the storage NIC is attached
+— which is destructive to get wrong on a running system. If you would rather call
+the playbooks yourself, every target is listed with its equivalent command in
+**[docs/BUILD.md](docs/BUILD.md)**.

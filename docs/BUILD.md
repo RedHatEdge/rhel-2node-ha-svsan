@@ -358,7 +358,37 @@ pcs quorum status          # Total votes: 3
 pcs stonith fence node2    # must actually power-cycle it
 ```
 
-## C. The witness
+## C. Operator access — Cockpit
+
+```
+make admin
+```
+
+Creates the `admin` account (in `wheel`, `libvirt` and `qemu`), sets a password
+for it and for root, and brings up Cockpit on **:9090**.
+
+`make admin` touches no networking, so it is safe against a running cluster.
+Prefer it over a full `make substrate` when access is all you are changing —
+substrate reconfigures the storage NIC, and on a live system that drops storage.
+
+Three things about this are easy to get wrong:
+
+- **Cockpit authenticates through PAM, not SSH keys.** A key-only account cannot
+  log into the web UI at all, so the account needs a password even if you only
+  ever use keys over SSH. The role refuses to create an account with neither.
+- **Cockpit's Machines page needs `libvirt-dbus`.** It reaches libvirt over
+  D-Bus, not by talking to `libvirtd` or `virtqemud`. Without it the page reports
+  *"Virtualization service (libvirt) is not active"* while `virsh` on the same
+  host lists every guest — so `virsh` is not a valid check for this.
+- **`libvirt-dbus` runs as the `libvirtdbus` user**, and the D-Bus policy grants
+  it ownership of `org.libvirt`. On an image-mode host the RPM's scriptlet user
+  does not survive into the deployed system, which is why the image declares it
+  in `/usr/lib/sysusers.d`.
+
+Change the demo password before this touches anything real — see
+`roles/common_base/defaults/main.yml`.
+
+## D. The witness
 
 ```
 make nsh-image ZIP=~/Downloads/svsan_6-7_plugin_ova.zip
@@ -379,7 +409,7 @@ systems share a failure domain and partition identically.
 ss -tlnp | grep 4174       # smclusterd listening
 ```
 
-## D. Appliance image and first boot
+## E. Appliance image and first boot
 
 ```
 make vsa-image ZIP=~/Downloads/svsan_6-7_windows_installer_plus_powershell.zip
@@ -392,7 +422,7 @@ up on **management only**, for the DHCP reason in Stage 0 step 0.
 The appliances come up on **management only** at this stage, for the DHCP reason in Stage 0 step 0. Their MACs are set from inventory rather than generated, so each
 appliance keeps a stable identity across rebuilds.
 
-## E. The wizard — per appliance
+## F. The wizard — per appliance
 
 Find them with `virsh -c qemu:///system net-dhcp-leases default`, then browse to
 `https://<mgmt-ip>/`, **`admin` / `password`**.
@@ -407,7 +437,7 @@ Find them with `virsh -c qemu:///system net-dhcp-leases default`, then browse to
 
 Mirroring becomes available once the wizard completes.
 
-## F. Snapshot — before anything else
+## G. Snapshot — before anything else
 
 ```
 make vsa-snapshot
@@ -417,7 +447,7 @@ make vsa-snapshot
 snapshot taken after a mirror exists carries that mirror's metadata, so restoring
 it brings back a target whose backing store no longer exists.
 
-## G. Storage NIC
+## H. Storage NIC
 
 ```
 make svsan-attach-san
@@ -446,7 +476,7 @@ If an appliance ever loses a NIC, the logical interface is disabled and its devi
 binding cleared. When re-enabling it, set the Assigned Network Device explicitly —
 check that column shows the storage MAC and not the management one.
 
-## H. Pools
+## I. Pools
 
 **Pools → Create Pool** on each: name **`pool1`** — identical on both, because a
 mirrored target is created by naming the remote pool — RAID level **JBOD**, on the
@@ -455,7 +485,7 @@ mirrored target is created by naming the remote pool — RAID level **JBOD**, on
 JBOD is right: one data disk per node, and redundancy comes from the network
 mirror, not from local RAID.
 
-## I. Witness and targets
+## J. Witness and targets
 
 Discovery is **automatic** — the appliances find each other and the witness with
 no configuration.
@@ -477,7 +507,7 @@ CREATE stays greyed until it is set.
 `Majority` is what gives the mirror split-brain protection. Without a witness the
 only choice is `Up`, in which a plex stays online whenever it is healthy.
 
-## J. Access control
+## K. Access control
 
 **Initiators → Create Initiator**, twice, OS Type **Linux**:
 
@@ -493,7 +523,7 @@ running, or it cannot take over. A target with an empty ACL accepts nobody and
 says so only as an informational event, so from the host it looks like a network
 fault.
 
-## K. Present to the hosts
+## L. Present to the hosts
 
 ```
 make svsan-attach
@@ -523,7 +553,7 @@ per-device. Detection is the larger half of the wait.
 multipath -ll        # /dev/mapper/pos and /dev/mapper/pgsql, 2 paths each
 ```
 
-## L. Guests
+## M. Guests
 
 ```
 make guests
@@ -549,36 +579,6 @@ healthy:
   would hit this.
 - **Ports 49152-49215** open, or migration authenticates, starts, then fails with
   "no route to host"
-
-## M. Operator access — Cockpit
-
-```
-make admin
-```
-
-Creates the `admin` account (in `wheel`, `libvirt` and `qemu`), sets a password
-for it and for root, and brings up Cockpit on **:9090**.
-
-`make admin` touches no networking, so it is safe against a running cluster.
-Prefer it over a full `make substrate` when access is all you are changing —
-substrate reconfigures the storage NIC, and on a live system that drops storage.
-
-Three things about this are easy to get wrong:
-
-- **Cockpit authenticates through PAM, not SSH keys.** A key-only account cannot
-  log into the web UI at all, so the account needs a password even if you only
-  ever use keys over SSH. The role refuses to create an account with neither.
-- **Cockpit's Machines page needs `libvirt-dbus`.** It reaches libvirt over
-  D-Bus, not by talking to `libvirtd` or `virtqemud`. Without it the page reports
-  *"Virtualization service (libvirt) is not active"* while `virsh` on the same
-  host lists every guest — so `virsh` is not a valid check for this.
-- **`libvirt-dbus` runs as the `libvirtdbus` user**, and the D-Bus policy grants
-  it ownership of `org.libvirt`. On an image-mode host the RPM's scriptlet user
-  does not survive into the deployed system, which is why the image declares it
-  in `/usr/lib/sysusers.d`.
-
-Change the demo password before this touches anything real — see
-`roles/common_base/defaults/main.yml`.
 
 ## N. Verify
 

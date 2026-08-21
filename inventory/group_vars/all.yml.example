@@ -38,12 +38,31 @@ repl_prefix: 24
 repl_network: 172.18.8.0/24
 repl_vlan_id: 0                     # 0 if your switch ports are untagged
 
+# The storage NIC must be enslaved to a real bridge, not left as a plain
+# interface. This is not a preference: the appliance is a guest, and the host has
+# to reach the appliance running on itself. A guest on a macvtap interface can
+# reach every host except the one it runs on, so the local iSCSI path never
+# forms — the host sees its peer's storage and not its own.
+#
+# Leave this true. Setting it false produces a cluster that installs cleanly and
+# then cannot mount its own storage.
+repl_as_bridge: true
+
 # ═══ QUORUM ════════════════════════════════════════════════════════════════
 # A two-node cluster cannot tell a dead peer from an unreachable one. The
 # arbiter casts the deciding vote. Do not substitute two_node: 1.
 
+cluster_name: store                 # any short name; appears in pcs output
 qnetd_host: 172.16.7.20             # your arbiter's address
 fence_backend: redfish
+
+# ffsplit is correct for two nodes with an arbiter: the qdevice votes for
+# whichever partition it can still reach, breaking the tie.
+qdevice_algorithm: ffsplit
+
+# Password for the `hacluster` account pcs uses to authenticate the nodes to one
+# another. REPLACE THIS. It is a cluster credential, not a demo convenience.
+hacluster_password: "REPLACE-WITH-YOUR-CLUSTER-PASSWORD"
 
 # ═══ GUESTS ════════════════════════════════════════════════════════════════
 # Two Ubuntu VMs, one per node, each able to run on either.
@@ -57,6 +76,10 @@ guest_vms:
   - { name: database, home_node: node2, memory_mb: 8192, vcpus: 4 }
 
 guest_image_url: https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img
+
+# Where the downloaded cloud image is cached on the control node. Downloaded once
+# and copied to each host, rather than pulled twice from the internet.
+guest_image_local: "{{ playbook_dir }}/../images/jammy-server-cloudimg-amd64.img"
 
 # ═══ StorMagic appliance ═══════════════════════════════════════════════════
 # The appliance derives its serial number from the MAC of its first interface,

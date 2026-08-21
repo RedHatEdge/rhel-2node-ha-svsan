@@ -33,10 +33,12 @@ free_after=$(on "$SURVIVOR_IP" "free -m | awk '/^Mem:/{print \$7}'")
 # resident until its workload touches the rest. Sizing has to be driven by what
 # is COMMITTED, not by what happens to be resident 30 seconds after a cold
 # start. Record both, and judge headroom against the committed figure.
+# awk, not bc -- bc is not in a minimal RHEL image, and a missing binary here
+# returned an empty string rather than an error, so the metric silently vanished.
 committed=$(on "$SURVIVOR_IP" \
   "for d in \$(virsh list --name 2>/dev/null | grep -v '^\$' | grep -v '^svsan-'); do
      virsh dominfo \$d 2>/dev/null | awk '/Max memory/{print int(\$3/1024)}'
-   done | paste -sd+ | bc" 2>/dev/null)
+   done | awk '{t+=\$1} END{print t+0}'" 2>/dev/null)
 committed=${committed//[^0-9]/}
 total_mb=$(on "$SURVIVOR_IP" "free -m | awk '/^Mem:/{print \$2}'")
 total_mb=${total_mb//[^0-9]/}
