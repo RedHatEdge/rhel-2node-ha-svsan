@@ -1,5 +1,5 @@
 ---
-# Pacemaker resources for Option A.
+# Pacemaker resources for the mirrored iSCSI targets.
 #
 # Because storage is shared, this is nearly the whole cluster config: guest VMs,
 # fence devices, quorum device, and one readiness gate. No promotable clones, no

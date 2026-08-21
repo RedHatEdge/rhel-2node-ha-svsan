@@ -1,5 +1,5 @@
 ---
-# Option A — StorMagic SvSAN. Complete, standalone build.
+# StorMagic SvSAN. Complete, standalone build.
 #
 #   make svsan          (or)
 #   ansible-playbook playbooks/10-storage-svsan.yml -e storage_backend=svsan
@@ -26,7 +26,7 @@
     - name: Warn that the storage NIC will be rebridged
       ansible.builtin.debug:
         msg: |
-          Option A converts the storage interface to a bridge ({{ repl_bridge }}),
+          This converts the storage interface to a bridge ({{ repl_bridge }}),
           because the VSA attaches to it and the host must reach its OWN VSA over
           it — the host is the iSCSI initiator. macvtap cannot do that.
 

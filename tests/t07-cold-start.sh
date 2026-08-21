@@ -2,7 +2,7 @@
 # Cold start from full power loss. Retail sites lose power; the whole boot
 # ordering chain has to hold unattended, thousands of times.
 #
-# For Option A this is the sharpest test of the bootstrap chain:
+# This is the sharpest test of the bootstrap chain:
 #   local storage -> VSA -> mirror quorum w/ witness -> iscsid -> multipath -> guests
 # If the readiness gate is wrong, guests try to start before storage exists.
 set -u; source "$(dirname "$0")/lib.sh"; require_confirm

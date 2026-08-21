@@ -116,7 +116,7 @@ RUN dnf -y install \
  && dnf clean all
 
 # ---------------------------------------------------------------------------
-# 5. Option A — SvSAN client side
+# 5. SvSAN client side
 #    The VSA itself is a VM deployed later; the host needs the initiator stack.
 # ---------------------------------------------------------------------------
 RUN dnf -y install \
@@ -124,7 +124,7 @@ RUN dnf -y install \
  && dnf clean all
 
 # ---------------------------------------------------------------------------
-# 7. Services
+# 6. Services
 #    Enabled here so a freshly installed node is reachable and time-synced
 #    before Ansible ever connects. Cluster services are deliberately NOT
 #    enabled — pcs owns starting corosync/pacemaker once the cluster is formed.
@@ -135,7 +135,7 @@ RUN systemctl enable sshd chronyd firewalld NetworkManager libvirtd pcsd
 RUN printf 'ipmi_devintf\nipmi_si\n' > /etc/modules-load.d/ipmi.conf
 
 # ---------------------------------------------------------------------------
-# 8. Host configuration that belongs in the image
+# 7. Host configuration that belongs in the image
 # ---------------------------------------------------------------------------
 # Key-only root login — the playbooks connect as root.
 RUN sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config \
@@ -181,7 +181,7 @@ RUN mkdir -p /usr/lib/bootc/kargs.d && \
 RUN systemctl enable serial-getty@ttyS0.service
 
 # ---------------------------------------------------------------------------
-# 9. Unregister so no entitlement leaks into the image
+# 8. Unregister so no entitlement leaks into the image
 # ---------------------------------------------------------------------------
 RUN subscription-manager unregister || true; \
     subscription-manager clean || true; \

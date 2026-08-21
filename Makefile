@@ -5,7 +5,7 @@
 #   make discover    gather hardware, write inventory/host_vars
 #   make substrate   cluster, quorum, fencing, KVM
 #   make admin       admin account + Cockpit only (safe on a live cluster)
-#   make svsan       stage Option A
+#   make svsan       appliances, pools, targets, witness
 #   make status      pcs status from node1
 #
 # Everything runs inside .venv, so the system Ansible is never used.
@@ -72,7 +72,7 @@ test:
 clean:
 	rm -rf $(VENV) collections
 
-# ── Option A: appliance image ──────────────────────────────────────────────
+# ── Appliance image ──────────────────────────────────────────────
 # Converts the Hyper-V package to a KVM boot image. Uses the Hyper-V VHD rather
 # than the vSphere OVA: the two disks are byte-identical, but the OVA declares
 # transport com.vmware.guestInfo and ships no CD-ROM, so it expects config over
@@ -112,7 +112,7 @@ vsa-snapshot: venv
 	  echo "  -> lab/svsan/images/svsan-$$n-boot.qcow2"; \
 	done
 
-# Tear Option A down completely, leaving Option B untouched.
+# Tear the appliance layer down completely.
 vsa-destroy: venv
 	$(VENV)/bin/ansible cluster -i inventory -b -m shell -a '\
 	  virsh destroy svsan-$$(hostname -s) 2>/dev/null; \
@@ -121,7 +121,7 @@ vsa-destroy: venv
 	  lvremove -f vgstore/lv-svsan-pool 2>/dev/null; true'
 	@echo "Appliance layer removed."
 
-# ── Option A: witness container ────────────────────────────────────────────
+# ── Witness container ────────────────────────────────────────────
 # The SvSAN witness as a container, deployable to any RHEL 9 host with podman.
 # Built from the amd64 binaries in a StorMagic package you supply; a
 # vendor-supplied amd64 witness package is preferable if you have one.
@@ -135,7 +135,7 @@ nsh-image:
 	podman save -o lab/svsan/images/nsh-witness.tar localhost/nsh-witness:6.7.0.3
 	@echo "witness image -> lab/svsan/images/nsh-witness.tar"
 
-# Deploy just the witness, without touching the rest of Option A.
+# Deploy just the witness, without touching the rest of the storage layer.
 witness: venv
 	$(VENV)/bin/ansible-playbook -i inventory playbooks/10-storage-svsan.yml \
 	  -e storage_backend=svsan --limit arbiter

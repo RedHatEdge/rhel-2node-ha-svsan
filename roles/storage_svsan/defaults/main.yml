@@ -1,5 +1,5 @@
 ---
-# Option A — StorMagic SvSAN.
+# StorMagic SvSAN.
 #
 # Each node runs a VSA (a VM) that takes raw local disk and re-presents it as
 # iSCSI. The two VSAs mirror active/active; writes are acked only after both

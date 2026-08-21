@@ -72,9 +72,9 @@
       fit a second adapter, or set repl_vlan_id in group_vars to tag the storage
       VLAN onto the management interface.
 
-# ── storage interface as a BRIDGE (Option A only) ──────────────────────────
+# ── storage interface as a BRIDGE ──────────────────────────
 #
-# Option A needs the VSA attached to the storage segment, and the host must be
+# The VSA attaches to the storage segment, and the host must be
 # able to reach its OWN VSA because the host is the iSCSI initiator logging into
 # it. macvtap cannot do that — a macvtap guest can reach every host except the
 # one it runs on — so the storage NIC has to be a real bridge, exactly as the
