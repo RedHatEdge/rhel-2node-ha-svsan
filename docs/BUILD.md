@@ -127,11 +127,13 @@ podman login registry.redhat.io
 podman login <your-registry>
 ```
 
-**Build on RHEL, not Fedora or a Mac.** A subscribed RHEL host has entitlements
-that podman passes into the build automatically, so the image can install RHEL
-packages with no further configuration. On an unsubscribed host you have to feed
-an activation key in as a build secret, which works but is a detour you do not
-need.
+**A subscribed RHEL build host is the shortest path.** Its entitlements are
+passed into the build automatically, so the image installs RHEL packages with no
+further setup. Anywhere else that runs podman will build this just as well —
+Fedora, another distribution, a Mac — you supply the entitlement yourself as an
+activation key in `bootc/secrets/`, which the build picks up on its own. The
+resulting image is the same; the only difference is where the entitlement comes
+from and how much you set up first.
 
 ### 3. Read the MACs out of firmware
 
