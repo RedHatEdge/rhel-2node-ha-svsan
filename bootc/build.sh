@@ -182,8 +182,7 @@ Next:
        cp inventory/hosts.yml.example inventory/hosts.yml
        cp inventory/group_vars/all.yml.example inventory/group_vars/all.yml
        ansible-playbook playbooks/01-discover.yml     # writes host_vars
-  3. ansible-playbook playbooks/00-substrate.yml \
-       -e storage_backend=svsan -e fence_backend=redfish
+  3. ansible-playbook playbooks/00-substrate.yml -e storage_backend=svsan -e fence_backend=redfish
 
      storage_backend is not optional -- without it the storage NIC is not
      bridged and the host cannot reach the appliance running on itself.
