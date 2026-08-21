@@ -129,20 +129,26 @@ those from the hardware. The `.example` files there show the shape only.
 
 Every value marked `REPLACE` has to be yours. The rest has a working default.
 
-### Three keys, for three different things
+### One key, three places it has to go
 
-Easy to conflate, and each fails in a different place:
+You do not need three keys. Create one — `~/.ssh/store-cluster` in Stage 0
+step 4 — and put that same public half in all three places. They are separate
+settings applied at different stages, so each has to be filled in individually:
 
-| | goes in | gets you |
+| where you put it | what it gets you | applied |
 |---|---|---|
-| node root key | `bootc/config.toml`, before the ISO is built | Ansible's access to the nodes |
-| `admin_ssh_key` | `all.yml` | the `admin` account, alongside its password |
-| `guest_ssh_key` | `all.yml` | the guests, once they exist |
+| `bootc/config.toml` | `root` on the nodes, which is how Ansible reaches them | baked into the ISO at build time |
+| `admin_ssh_key` in `all.yml` | the `admin` account, alongside its password | `make admin` |
+| `guest_ssh_key` in `all.yml` | the guests | `make guests` |
 
-One key can serve all three — `~/.ssh/store-cluster.pub` from Stage 0 step 4 is
-the obvious candidate — but each has to be filled in separately, and the first is
-fixed at image build time rather than by Ansible. [docs/BUILD.md](docs/BUILD.md)
-covers creating that key.
+Only the first is fixed when the image is built; the other two can be changed
+later by editing `all.yml` and re-running. Different keys work fine if you want
+them, but there is no reason to start that way.
+
+One more key exists that you never touch: Ansible generates a root keypair on
+each node and authorises it on the other, so the nodes can reach each other as
+root. Live migration depends on it. It is created automatically and does not
+belong in any inventory file.
 
 ## Running it without make
 
