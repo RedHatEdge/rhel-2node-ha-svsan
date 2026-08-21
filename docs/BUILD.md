@@ -508,13 +508,31 @@ Two routes, both on this page:
 
 ![The Activate step, with online and offline routes](images/f3-activate.png)
 
-**4. Identify** — hostname `vsa1` / `vsa2`, domain **blank**
+**4. Identify** — hostname `vsa1` on the first appliance, `vsa2` on the second,
+and leave **Domain blank**.
 
-**5. Password** — set the appliance admin password
+The hostname is not cosmetic. It is how each appliance refers to the other from
+here on: it is the name you pick when you nominate the remote host while creating
+a mirrored target, and it is what appears in the `Storage Information` column
+against each plex and in the connection list. Getting them the wrong way round
+produces a working mirror that is confusing to read for the life of the system.
+Leaving Domain blank keeps those names short in every one of those places.
 
-**6. Finish**
+**5. Password** — set the appliance admin password.
 
-Mirroring becomes available once the wizard completes.
+This replaces the `admin` / `password` default you used to reach the wizard, and
+it is the credential for the appliance UI from now on. Set the same one on both
+appliances unless you have a reason not to — every later step in this guide is
+done twice, once per appliance.
+
+**6. Finish** — the wizard closes and drops you on the appliance's Home page.
+
+These last three are plain forms with no traps in them; the step that stops
+people is Activate, above.
+
+Mirroring becomes available once the wizard completes. If **Targets → Mirroring**
+is greyed out or a mirrored target cannot be created, the usual cause is that one
+of the two appliances has not finished its wizard.
 
 ## G. Snapshot — before anything else
 
