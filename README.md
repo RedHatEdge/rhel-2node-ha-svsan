@@ -67,6 +67,7 @@ an `el7` RPM — if you have one, prefer it.
 | 1 × RHEL 9 host | arbiter, running both quorum services |
 | 2 × NICs per node | management and storage on separate segments |
 | The **Hyper-V** SvSAN package | for the appliance image — not the vSphere OVA |
+| The **vCenter plugin** package | supplies the amd64 binaries the witness container is built from |
 | A trial licence | see below |
 | A control node | RHEL 9, subscribed — builds the image and runs Ansible. See Stage 0 |
 
@@ -97,7 +98,9 @@ Once the two nodes are installed and reachable:
 ```
 cp inventory/hosts.yml.example          inventory/hosts.yml
 cp inventory/group_vars/all.yml.example inventory/group_vars/all.yml
-# work down both — anything marked REPLACE has to change
+
+# hosts.yml  — the three addresses, matching the MAC table in bootc/config.toml
+# all.yml    — work down it; anything marked REPLACE will not work until changed
 
 make discover             # each node records its own disks and NICs
 make substrate            # cluster, quorum, fencing
@@ -125,6 +128,21 @@ You do **not** create `inventory/host_vars/` by hand — `make discover` generat
 those from the hardware. The `.example` files there show the shape only.
 
 Every value marked `REPLACE` has to be yours. The rest has a working default.
+
+### Three keys, for three different things
+
+Easy to conflate, and each fails in a different place:
+
+| | goes in | gets you |
+|---|---|---|
+| node root key | `bootc/config.toml`, before the ISO is built | Ansible's access to the nodes |
+| `admin_ssh_key` | `all.yml` | the `admin` account, alongside its password |
+| `guest_ssh_key` | `all.yml` | the guests, once they exist |
+
+One key can serve all three — `~/.ssh/store-cluster.pub` from Stage 0 step 4 is
+the obvious candidate — but each has to be filled in separately, and the first is
+fixed at image build time rather than by Ansible. [docs/BUILD.md](docs/BUILD.md)
+covers creating that key.
 
 ## Running it without make
 
