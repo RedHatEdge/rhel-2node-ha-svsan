@@ -161,9 +161,16 @@ Next:
   1. Write the ISO to USB and install BOTH nodes from it.
      One image, both nodes — identity comes from Ansible, not the image.
      Afterwards check what the installer chose:  cat /root/disk-layout.log
-  2. Put the nodes' DHCP addresses in inventory/lab.yml, then:
+  2. Create your inventory from the example and put the nodes' addresses in it:
+       cp inventory/hosts.yml.example inventory/hosts.yml
+       cp inventory/group_vars/all.yml.example inventory/group_vars/all.yml
        ansible-playbook playbooks/01-discover.yml     # writes host_vars
-  3. ansible-playbook playbooks/00-substrate.yml -e fence_backend=redfish
+  3. ansible-playbook playbooks/00-substrate.yml \
+       -e storage_backend=svsan -e fence_backend=redfish
+
+     storage_backend is not optional -- without it the storage NIC is not
+     bridged and the host cannot reach the appliance running on itself.
+     'make substrate' passes it for you.
 
 To update a running node later:
        ssh root@<node> 'bootc upgrade && systemctl reboot'
